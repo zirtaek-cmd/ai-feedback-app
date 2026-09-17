@@ -20,14 +20,20 @@ requirements.txt   파이썬 의존성
 docs/              상세 설계안 + 빌드 가이드
 ```
 
-## 빠른 시작
+## 사전 설치 (Windows)
+아래 프로그램을 먼저 설치하세요. 이후 명령어는 전부 **PowerShell**(시작 메뉴 → "PowerShell" 검색)에서 실행합니다.
+- [Git for Windows](https://git-scm.com/download/win)
+- [Node.js LTS](https://nodejs.org) 설치 후 `npm install -g firebase-tools`
+- [Python](https://www.python.org/downloads/) 설치 시 **"Add python.exe to PATH" 체크 필수**
+
+## 빠른 시작 (PowerShell 기준)
 1. **Firebase 프로젝트 생성**(무료 Spark) → Authentication에서 **Google 로그인** 켜기 → **Firestore** 생성.
-2. `cp public/config.example.js public/config.js` 후 `firebaseConfig`, `ALLOWED_DOMAIN`, `GEMINI_API_KEY` 를 본인 값으로 입력.
+2. `Copy-Item public/config.example.js public/config.js` 후 `firebaseConfig`, `ALLOWED_DOMAIN`, `GEMINI_API_KEY` 를 본인 값으로 입력.
 3. 서비스 계정 키 발급 → `serviceAccountKey.json`(로컬, 커밋 금지).
-4. `cp .env.example .env` 후 `GEMINI_API_KEY` 입력. `cp .firebaserc.example .firebaserc` 후 프로젝트 ID 입력. `cp seed/admins.example.json seed/admins.json` 후 관리자 계정 입력.
-5. `pip install -r requirements.txt`
+4. `Copy-Item .env.example .env` 후 `GEMINI_API_KEY` 입력. `Copy-Item .firebaserc.example .firebaserc` 후 프로젝트 ID 입력. `Copy-Item seed/admins.example.json seed/admins.json` 후 관리자 계정 입력.
+5. `pip install -r requirements.txt` (실행 안 되면 `py -m pip install -r requirements.txt`)
 6. 보안 규칙·시드 반영: `firebase deploy --only firestore:rules` → `python seed_import.py`
-7. 배포: `firebase deploy --only hosting` (또는 GitHub Pages로 `public/` 서빙).
+7. 배포: `firebase deploy --only hosting`
 8. **관리자 설정**: `seed/admins.json`에 등록한 계정으로 웹에 1회 로그인 → `python seed_import.py` 재실행 → 재로그인.
 
 ## 운영 루틴
