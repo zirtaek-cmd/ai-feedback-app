@@ -21,6 +21,3 @@ __pycache__/
 # macOS / Firebase CLI 로컬 캐시
 .DS_Store
 .firebase/
-
-# 참고: public/config.js 의 firebaseConfig(apiKey 등)는 '클라이언트 공개용'이라
-# 노출돼도 보안 문제가 아니다(접근 통제는 보안 규칙이 담당). 커밋해도 무방.

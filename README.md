@@ -28,7 +28,7 @@ docs/              상세 설계안 + 빌드 가이드
 5. `pip install -r requirements.txt`
 6. 보안 규칙·시드 반영: `firebase deploy --only firestore:rules` → `python seed_import.py`
 7. 배포: `firebase deploy --only hosting` (또는 GitHub Pages로 `public/` 서빙).
-8. **관리자 설정**: 두 교사 계정으로 웹에 1회 로그인 → `python seed_import.py` 재실행 → 교사 계정 재로그인.
+8. **관리자 설정**: `seed/admins.json`에 등록한 계정으로 웹에 1회 로그인 → `python seed_import.py` 재실행 → 재로그인.
 
 ## 운영 루틴
 학생 제출 → `python grade.py`(채점, 초안 저장) → 교사 화면에서 검토·공개 → 학생 확인.
