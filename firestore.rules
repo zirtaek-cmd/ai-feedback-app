@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() { return request.auth != null; }
+    function isAdmin()    { return isSignedIn() && request.auth.token.admin == true; }
+    function isInRoster() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/roster/$(request.auth.token.email));
+    }
+
+    // 학생 명단: 본인 문서만 읽기(입장 확인용), 쓰기는 관리자만
+    match /roster/{email} {
+      allow read:  if isAdmin() || (isSignedIn() && request.auth.token.email == email);
+      allow write: if isAdmin();
+    }
+
+    // 학습지 카탈로그: 로그인+명단 학생 또는 관리자 읽기, 쓰기는 관리자만
+    match /worksheets/{worksheetId} {
+      allow read:  if isAdmin() || isInRoster();
+      allow write: if isAdmin();
+    }
+
+    // 제출물: 본인 것만 생성/읽기. 채점 전(submitted) 취소, 공개된(released) 건 재제출 시
+    // 이전 자료 자동 삭제를 위해 본인이 삭제 가능. 그 외 수정(=공개 처리 등)은 관리자만.
+    match /submissions/{submissionId} {
+      allow read:   if isAdmin() ||
+                       (isSignedIn() && resource.data.studentUid == request.auth.uid);
+      allow create: if isInRoster()
+                    && request.resource.data.studentUid == request.auth.uid
+                    && request.resource.data.studentEmail == request.auth.token.email;
+      // 수정: 관리자는 전체 필드, 본인은 recognizedText(사진으로 인식한 문장)만 고칠 수 있음.
+      allow update: if isAdmin() ||
+                       (isSignedIn() && resource.data.studentUid == request.auth.uid
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["recognizedText"]));
+      allow delete: if isAdmin() ||
+                       (isSignedIn() && resource.data.studentUid == request.auth.uid
+                        && (resource.data.status == "submitted" || resource.data.status == "released"));
+
+      // 이미지 페이지(1장=1문서): 본인 것만 생성/읽기. 부모 제출물을 본인이 삭제할 수 있는
+      // 상태(취소 또는 재제출로 인한 이전 자료 삭제)면 페이지도 본인이 삭제 가능.
+      match /pages/{pageId} {
+        allow read:   if isAdmin() ||
+                         (isSignedIn() && resource.data.studentUid == request.auth.uid);
+        allow create: if isInRoster()
+                      && request.resource.data.studentUid == request.auth.uid;
+        allow update: if isAdmin();
+        allow delete: if isAdmin() ||
+                         (isSignedIn() && resource.data.studentUid == request.auth.uid
+                          && (get(/databases/$(database)/documents/submissions/$(submissionId)).data.status == "submitted"
+                              || get(/databases/$(database)/documents/submissions/$(submissionId)).data.status == "released"));
+      }
+    }
+
+    // 채점 초안(교사 전용): 학생 접근 전면 차단. 관리자만.
+    // ※ Claude Code 채점 스크립트는 Admin SDK라 이 규칙을 우회해 읽고 씀.
+    match /reviews/{submissionId} {
+      allow read, write: if isAdmin();
+    }
+
+    // 자유 채점(특정 학습지에 안 묶인 문제 사진 채점): 학생이 브라우저에서 직접
+    // 채점까지 끝낸 결과를 한 번에 저장한다(교사 검토 없음). 10분 후 자동 삭제 대상
+    // 이라 본인이 직접 지울 수 있어야 한다.
+    match /freeformSubmissions/{id} {
+      allow read:   if isAdmin() ||
+                       (isSignedIn() && resource.data.studentUid == request.auth.uid);
+      allow create: if isInRoster()
+                    && request.resource.data.studentUid == request.auth.uid
+                    && request.resource.data.studentEmail == request.auth.token.email;
+      allow delete: if isAdmin() ||
+                       (isSignedIn() && resource.data.studentUid == request.auth.uid);
+
+      match /pages/{pageId} {
+        allow read:   if isAdmin() ||
+                         (isSignedIn() && resource.data.studentUid == request.auth.uid);
+        allow create: if isInRoster()
+                      && request.resource.data.studentUid == request.auth.uid;
+        allow delete: if isAdmin() ||
+                         (isSignedIn() &&
+                          get(/databases/$(database)/documents/freeformSubmissions/$(id)).data.studentUid == request.auth.uid);
+      }
+    }
+
+    // 자유 채점 사용 횟수: 학생당 5회로 서버 규칙에서 실제로 강제한다(클라이언트
+    // 코드를 조작해도 우회 불가) — 문서 생성 시 1, 이후 매번 정확히 +1 만 허용하고
+    // 현재 값이 5 미만일 때만 갱신을 허용한다.
+    match /freeformUsage/{uid} {
+      allow read:   if isAdmin() || (isSignedIn() && request.auth.uid == uid);
+      allow create: if isSignedIn() && request.auth.uid == uid
+                    && request.resource.data.count == 1;
+      allow update: if isSignedIn() && request.auth.uid == uid
+                    && resource.data.count < 5
+                    && request.resource.data.count == resource.data.count + 1;
+    }
+  }
+}

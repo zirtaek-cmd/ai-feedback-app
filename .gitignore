@@ -1,0 +1,26 @@
+# 절대 커밋 금지 — 이 키가 있으면 DB 전체 접근 가능
+serviceAccountKey.json
+.env
+
+# 실제 Firebase 프로젝트 ID — 공개 템플릿에는 .firebaserc.example만 커밋
+.firebaserc
+
+# 실제 firebaseConfig + Gemini API 키 포함 — 공개 템플릿에는 config.example.js만 커밋
+public/config.js
+
+# 학생 이메일 포함 — 공개 저장소에 올리지 말 것
+seed/roster.json
+
+# 관리자 이메일 포함 — 공개 저장소에 올리지 말 것
+seed/admins.json
+
+# 파이썬
+__pycache__/
+*.pyc
+
+# macOS / Firebase CLI 로컬 캐시
+.DS_Store
+.firebase/
+
+# 참고: public/config.js 의 firebaseConfig(apiKey 등)는 '클라이언트 공개용'이라
+# 노출돼도 보안 문제가 아니다(접근 통제는 보안 규칙이 담당). 커밋해도 무방.

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>과학 서술형 피드백</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.css">
+  <link rel="stylesheet" href="./css/styles.css">
+</head>
+<body>
+
+  <!-- 로그인 -->
+  <section id="view-login" class="view center-screen">
+    <div class="login-card">
+      <h1>과학 서술형 피드백</h1>
+      <p class="muted">학교 구글 계정으로 로그인하세요.</p>
+      <button id="loginBtn" class="btn primary">구글로 로그인</button>
+      <p id="login-error" class="error hidden"></p>
+    </div>
+  </section>
+
+  <!-- 로딩 -->
+  <section id="view-loading" class="view center-screen hidden">
+    <div class="spinner"></div>
+  </section>
+
+  <!-- 앱 -->
+  <section id="view-app" class="view hidden">
+    <header class="topbar">
+      <div class="brand-group">
+        <div class="brand">과학 서술형 피드백</div>
+        <nav id="brandNav" class="brand-nav"></nav>
+      </div>
+      <div class="user">
+        <span id="role" class="role-tag"></span>
+        <span id="who" class="muted"></span>
+        <button id="logoutBtn" class="btn ghost">로그아웃</button>
+      </div>
+    </header>
+    <div id="app-root"></div>
+  </section>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
