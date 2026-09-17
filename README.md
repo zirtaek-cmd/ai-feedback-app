@@ -2,6 +2,8 @@
 
 학생이 서술형 답안을 사진으로 제출 → Gemini가 채점·피드백 → 교사 검토·공개 → 학생이 자기 방에서 확인·복습. 과목·학년 무관하게 사용 가능. Classroom 없이 웹앱 하나로 통합, 카드 없이 무료(Firebase Spark + Gemini 무료 등급).
 
+> **선생님이 이 저장소를 처음 가져오셨다면** 터미널 명령어 없이 Wrks 코딩 에이전트로 배포하는 [배포 가이드](https://claude.ai/artifact/RyU73DEMpdtvjCVgvqhq8h)를 따라가세요. 아래 내용은 직접 명령어로 배포할 때 참고하는 기술 문서입니다.
+
 ## 폴더 구조
 ```
 public/            웹앱 (Firebase Hosting)
@@ -20,17 +22,19 @@ requirements.txt   파이썬 의존성
 docs/              상세 설계안 + 빌드 가이드
 ```
 
-## 사전 설치 (Windows)
-아래 프로그램을 먼저 설치하세요. 이후 명령어는 전부 **PowerShell**(시작 메뉴 → "PowerShell" 검색)에서 실행합니다.
+## 수동 배포 (참고용 — Windows/PowerShell 기준)
+Wrks 에이전트 없이 직접 명령어로 배포할 때만 필요합니다.
+
+**사전 설치**
 - [Git for Windows](https://git-scm.com/download/win)
 - [Node.js LTS](https://nodejs.org) 설치 후 `npm install -g firebase-tools`
 - [Python](https://www.python.org/downloads/) 설치 시 **"Add python.exe to PATH" 체크 필수**
 
-## 빠른 시작 (PowerShell 기준)
+**단계**
 1. **Firebase 프로젝트 생성**(무료 Spark) → Authentication에서 **Google 로그인** 켜기 → **Firestore** 생성.
 2. `Copy-Item public/config.example.js public/config.js` 후 `firebaseConfig`, `ALLOWED_DOMAIN`, `GEMINI_API_KEY` 를 본인 값으로 입력.
 3. 서비스 계정 키 발급 → `serviceAccountKey.json`(로컬, 커밋 금지).
-4. `Copy-Item .env.example .env` 후 `GEMINI_API_KEY` 입력. `Copy-Item .firebaserc.example .firebaserc` 후 프로젝트 ID 입력. `Copy-Item seed/admins.example.json seed/admins.json` 후 관리자 계정 입력.
+4. `Copy-Item .env.example .env` 후 `GEMINI_API_KEY` 입력. `Copy-Item .firebaserc.example .firebaserc` 후 프로젝트 ID 입력. `Copy-Item seed/admins.example.json seed/admins.json` 후 관리자 계정 입력. `Copy-Item seed/roster.example.json seed/roster.json` 후 우리 반 학생 명단(이메일/학년/반/번호)으로 채우기.
 5. `pip install -r requirements.txt` (실행 안 되면 `py -m pip install -r requirements.txt`)
 6. 보안 규칙·시드 반영: `firebase deploy --only firestore:rules` → `python seed_import.py`
 7. 배포: `firebase deploy --only hosting`
@@ -47,5 +51,6 @@ docs/              상세 설계안 + 빌드 가이드
 
 ## 주의
 - `serviceAccountKey.json`, `.env`, `.firebaserc`, `public/config.js`, `seed/roster.json`, `seed/admins.json` 은 커밋 금지(`.gitignore` 반영). 각자 `*.example` 파일을 복사해 본인 값으로 채울 것.
+- `seed/roster.json`은 예시 템플릿(`seed/roster.example.json`)만 제공됩니다 — 실제 학생 명단은 본인 학교 것으로 직접 작성해야 합니다.
 - 무료 등급 모델/한도는 수시로 바뀌므로 `.env` 의 `GEMINI_MODEL` 을 현재 가용 모델로 맞출 것.
 - 학습지 제목은 코드와 동일(`4-1-1` 등). 바꾸려면 `seed/worksheets.json` 의 `title` 수정 후 재시드.
