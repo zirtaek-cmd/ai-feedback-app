@@ -7,6 +7,13 @@ import { wireLightboxImages } from "./lightbox.js";
 
 const THROTTLE_MS = 4000; // 무료 등급 RPM 대응
 
+// 채점 초안(reviews) 문서 키. 제출물 ID로 키를 잡으면 학생이 재제출할 때마다
+// (새 제출물 = 새 ID) 이전 초안이 짝을 잃고 영구히 남는다. 학생+학습지로 키를 잡으면
+// 재제출해도 같은 문서를 덮어쓰므로 문서 수가 (학생 수 x 학습지 수)로 고정된다.
+function reviewKey(sub) {
+  return `${sub.studentUid}_${sub.worksheetId}`;
+}
+
 let state = { items: [], selected: null, tab: "review" };
 let unsubscribeItems = null;
 let isGrading = false;
@@ -230,9 +237,9 @@ async function renderWorksheetAdmin(root) {
   document.getElementById("cleanupReviewsBtn").addEventListener("click", cleanupOrphanReviews);
 }
 
-// 제출물이 지워졌는데 남아있는 채점 기록(reviews)을 찾아 정리한다.
-// 학생은 reviews 를 지울 권한이 없어(규칙상 관리자 전용) 재제출·제출취소 때마다
-// 기록이 쌓이므로, 교사가 가끔 눌러서 정리하는 방식으로 둔다.
+// 대응하는 제출물이 없는 채점 기록(reviews)을 찾아 정리한다.
+// 키를 학생+학습지로 바꾼 뒤로는 재제출해도 기록이 쌓이지 않으므로, 이제는 제출물을
+// 완전히 지운 경우(학생의 제출 취소, 교사의 삭제)에만 가끔 남는다.
 async function cleanupOrphanReviews() {
   const btn = document.getElementById("cleanupReviewsBtn");
   btn.disabled = true;
@@ -242,8 +249,10 @@ async function cleanupOrphanReviews() {
       getDocs(collection(db, "reviews")),
       getDocs(collection(db, "submissions")),
     ]);
-    const subIds = new Set(subSnap.docs.map((d) => d.id));
-    const orphans = revSnap.docs.filter((d) => !subIds.has(d.id));
+    // 현재 제출물이 쓰는 키(학생+학습지) 집합과 비교한다. 예전 방식(제출물 ID)으로
+    // 남아있는 기록도 여기서 같이 걸러진다.
+    const liveKeys = new Set(subSnap.docs.map((d) => reviewKey(d.data())));
+    const orphans = revSnap.docs.filter((d) => !liveKeys.has(d.id));
     if (!orphans.length) {
       btn.textContent = "정리할 기록 없음";
       setTimeout(() => { btn.textContent = "남은 채점 기록 정리"; btn.disabled = false; }, 2000);
@@ -523,7 +532,7 @@ async function performRegrade(it, source = "text") {
     if (!imgs.length) throw new Error("이미지 없음");
     g = await gradeImages(imgs, wsData.referenceMaterial);
   }
-  await setDoc(doc(db, "reviews", it.id), g);
+  await setDoc(doc(db, "reviews", reviewKey(it)), g);
   const flat = toFlatGrade(g);
   await updateDoc(doc(db, "submissions", it.id), {
     grade: flat, feedback: g.feedback, recognizedText: g.recognizedText,
@@ -602,7 +611,7 @@ async function runGrading() {
           if (!imgs.length) throw new Error("이미지 없음");
           g = await gradeImages(imgs, wsData.referenceMaterial);
         }
-        await setDoc(doc(db, "reviews", s.id), g);
+        await setDoc(doc(db, "reviews", reviewKey(s)), g);
 
         // 채점 결과는 항상 교사 검토 대기(graded)로 둔다 — 채점 모델이 틀릴 수 있으므로
         // 교사가 확인하고 공개해야 학생에게 점수가 보인다(grade.py와 동일한 정책).
@@ -700,7 +709,7 @@ async function selectItem(id) {
 
   // 채점 초안은 목록에서 미리 읽지 않고, 항목을 연 이 시점에 한 건만 읽는다.
   if (it.review === undefined) {
-    const r = await getDoc(doc(db, "reviews", it.id));
+    const r = await getDoc(doc(db, "reviews", reviewKey(it)));
     it.review = r.exists() ? r.data() : null;
   }
 
@@ -1047,7 +1056,7 @@ async function deleteItem(it) {
         await deleteDoc(doc(db, "submissions", it.id, "pages", p.id));
       }
     }
-    await deleteDoc(doc(db, "reviews", it.id));
+    await deleteDoc(doc(db, "reviews", reviewKey(it)));
     await deleteDoc(doc(db, "submissions", it.id));
 
     state.items = state.items.filter((x) => x.id !== it.id);

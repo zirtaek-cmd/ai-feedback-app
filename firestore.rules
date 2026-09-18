@@ -82,7 +82,8 @@ service cloud.firestore {
 
     // 채점 초안(교사 전용): 학생 접근 전면 차단. 관리자만.
     // ※ Claude Code 채점 스크립트는 Admin SDK라 이 규칙을 우회해 읽고 씀.
-    match /reviews/{submissionId} {
+    // 문서 키는 {studentUid}_{worksheetId} — 재제출해도 같은 문서를 덮어쓴다.
+    match /reviews/{reviewId} {
       allow read, write: if isAdmin();
     }
 

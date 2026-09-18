@@ -257,7 +257,10 @@ def main():
                     print(f"  [건너뜀] 이미지 없음: {s.id}")
                     continue
                 g = append_resubmit_note(grade_images(imgs, reference_material))
-            db.collection("reviews").document(s.id).set(g)
+            # 채점 초안 키는 학생+학습지 (teacher.js 의 reviewKey 와 반드시 동일해야 한다).
+            # 제출물 ID로 잡으면 재제출마다 짝 잃은 기록이 쌓인다.
+            review_key = f"{data.get('studentUid')}_{data.get('worksheetId')}"
+            db.collection("reviews").document(review_key).set(g)
             db.collection("submissions").document(s.id).update({
                 "status": "graded",
                 "gradedAt": firestore.SERVER_TIMESTAMP,
