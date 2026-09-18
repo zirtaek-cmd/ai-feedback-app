@@ -19,6 +19,10 @@ let unsubscribeItems = null;
 let isGrading = false;
 let rosterMap = {};        // studentEmail -> { class, number }
 let worksheetOrderMap = {}; // worksheetId  -> order
+let worksheetTitleMap = {}; // worksheetId  -> title (목록의 학습지 그룹 제목)
+// 목록에서 교사가 펼쳐 둔 학습지 그룹("반|학습지코드"). 기본은 접힘이고, 스냅샷이 올 때마다
+// 목록을 다시 그리므로 DOM 의 open 상태 대신 여기에 기억해 둔다.
+const expandedGroups = new Set();
 
 // 목록 정렬·그룹핑(반별 구역, 학습지 번호순)에 쓸 명단/학습지 순서를 불러온다.
 // 명단 107명 + 학습지 9개라 탭을 옮길 때마다 다시 읽으면 116회씩 읽기가 쌓인다.
@@ -38,7 +42,11 @@ async function loadRosterAndWorksheets() {
   rosterMap = {};
   rosterSnap.docs.forEach((d) => { rosterMap[d.id] = d.data(); });
   worksheetOrderMap = {};
-  wsSnap.docs.forEach((d) => { worksheetOrderMap[d.id] = d.data().order ?? 0; });
+  worksheetTitleMap = {};
+  wsSnap.docs.forEach((d) => {
+    worksheetOrderMap[d.id] = d.data().order ?? 0;
+    worksheetTitleMap[d.id] = d.data().title || "";
+  });
   rosterLoadedAt = (rosterSnap.size && wsSnap.size) ? Date.now() : 0;
 }
 
@@ -678,34 +686,66 @@ function renderList() {
     return Number(a) - Number(b);
   });
 
+  const renderItem = (it) => {
+    const flag = it.reviewFlag ? `<span class="badge s-flag">확인 필요</span>` : "";
+    const edited = it.recognizedEditedBy === "student" ? `<span class="badge s-flag">문장 수정됨</span>` : "";
+    const active = state.selected === it.id ? "active" : "";
+    // 공개 전 점수는 목록에도 띄우지 않는다(초안은 항목을 열었을 때만 조회).
+    const score = it.status === "released" ? it.grade?.total : null;
+    const num = rosterMap[it.studentEmail]?.number;
+    const who = num ? `${num}번 ${escapeHtml(it.studentEmail)}` : escapeHtml(it.studentEmail);
+    return `<button class="ws-item ${active}" data-id="${escapeHtml(it.id)}">
+        <span class="ws-code">${who}</span>
+        <span>${score ?? "-"}점
+          <span class="badge ${STATUS_CLS[it.status] || "s-none"}">${STATUS_LABEL[it.status] || escapeHtml(it.status)}</span>
+          ${flag}${edited}
+        </span>
+      </button>`;
+  };
+
   list.innerHTML = classes.map((cls) => {
-    const items = byClass[cls].map((it) => {
-      const flag = it.reviewFlag ? `<span class="badge s-flag">확인 필요</span>` : "";
-      const edited = it.recognizedEditedBy === "student" ? `<span class="badge s-flag">문장 수정됨</span>` : "";
-      const active = state.selected === it.id ? "active" : "";
-      // 공개 전 점수는 목록에도 띄우지 않는다(초안은 항목을 열었을 때만 조회).
-      const score = it.status === "released" ? it.grade?.total : null;
-      const num = rosterMap[it.studentEmail]?.number;
-      const who = num ? `${num}번 ${escapeHtml(it.studentEmail)}` : escapeHtml(it.studentEmail);
-      return `<button class="ws-item ${active}" data-id="${escapeHtml(it.id)}">
-          <span class="ws-code">${escapeHtml(it.worksheetId)} · ${who}</span>
-          <span>${score ?? "-"}점
-            <span class="badge ${STATUS_CLS[it.status] || "s-none"}">${STATUS_LABEL[it.status] || escapeHtml(it.status)}</span>
-            ${flag}${edited}
-          </span>
-        </button>`;
+    // 반 구역 안을 다시 학습지별 접기/펴기 그룹으로 나눈다(정렬은 이미 학습지 번호순).
+    const byWs = {};
+    const wsOrder = [];
+    byClass[cls].forEach((it) => {
+      if (!byWs[it.worksheetId]) { byWs[it.worksheetId] = []; wsOrder.push(it.worksheetId); }
+      byWs[it.worksheetId].push(it);
+    });
+    const groups = wsOrder.map((wsId) => {
+      const key = `${cls}|${wsId}`;
+      const items = byWs[wsId];
+      const open = expandedGroups.has(key) ? " open" : "";
+      const title = worksheetTitleMap[wsId]
+        ? `${escapeHtml(wsId)} · ${escapeHtml(worksheetTitleMap[wsId])}`
+        : escapeHtml(wsId);
+      const pending = items.filter((it) => it.status === "graded" || it.reviewFlag).length;
+      const count = pending
+        ? `<span class="ws-group-count">${items.length}건 · 검토 ${pending}</span>`
+        : `<span class="ws-group-count">${items.length}건</span>`;
+      return `<details class="ws-group" data-key="${escapeHtml(key)}"${open}>
+          <summary class="ws-group-title"><span>${title}</span>${count}</summary>
+          ${items.map(renderItem).join("")}
+        </details>`;
     }).join("");
-    return `<div class="unit"><div class="unit-title">${cls === "미확인" ? cls : escapeHtml(String(cls)) + "반"}</div>${items}</div>`;
+    return `<div class="unit"><div class="unit-title">${cls === "미확인" ? cls : escapeHtml(String(cls)) + "반"}</div>${groups}</div>`;
   }).join("");
   list.querySelectorAll(".ws-item").forEach((b) =>
     b.addEventListener("click", () => selectItem(b.dataset.id))
+  );
+  list.querySelectorAll(".ws-group").forEach((d) =>
+    d.addEventListener("toggle", () => {
+      if (d.open) expandedGroups.add(d.dataset.key);
+      else expandedGroups.delete(d.dataset.key);
+    })
   );
 }
 
 async function selectItem(id) {
   state.selected = id;
-  renderList();
   const it = state.items.find((x) => x.id === id);
+  // 선택한 항목이 든 그룹은 펼쳐 둔다(접힌 채로 선택 표시만 남지 않도록).
+  if (it) expandedGroups.add(`${rosterMap[it.studentEmail]?.class ?? "미확인"}|${it.worksheetId}`);
+  renderList();
   const main = document.getElementById("t-main");
   if (!it || !main) return; // 클릭 직전에 목록에서 사라졌거나(학생 취소 등) 탭이 바뀐 경우
 

@@ -103,6 +103,22 @@ body {
   font-size: 13px; font-weight: 700; color: var(--muted);
   padding: 4px 8px; margin-bottom: 4px;
 }
+.ws-group { margin-bottom: 6px; }
+.ws-group-title {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 10px; border-radius: 8px; cursor: pointer; user-select: none;
+  font-size: 13px; font-weight: 700; color: var(--ink); list-style: none;
+}
+.ws-group-title::-webkit-details-marker { display: none; }
+.ws-group-title::before {
+  content: "▸"; display: inline-block; width: 12px; margin-right: 4px;
+  color: var(--muted); transition: transform .15s;
+}
+.ws-group[open] > .ws-group-title::before { transform: rotate(90deg); }
+.ws-group-title > span:first-of-type { flex: 1; }
+.ws-group-title:hover { background: var(--grey-soft); }
+.ws-group-count { font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.ws-group > .ws-item { padding-left: 26px; }
 .ws-item {
   width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
   background: transparent; border: none; border-radius: 8px; padding: 9px 10px;
