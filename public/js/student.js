@@ -13,7 +13,7 @@ const MAX_ATTEMPTS = 5;
 const STATUS = {
   none:     { key: "none",     label: "미제출",     cls: "s-none" },
   pending:  { key: "pending",  label: "검토 중",    cls: "s-pending" },
-  released: { key: "released", label: "완료",       cls: "s-done" },
+  released: { key: "released", label: "채점됨",     cls: "s-done" },
   rejected: { key: "rejected", label: "반려됨",     cls: "s-rejected" },
 };
 
@@ -221,7 +221,7 @@ function uploadPanel(attempts) {
         <textarea id="answerText" rows="8" placeholder="답안을 입력하세요"></textarea>
       </div>
       <button class="btn primary" id="submitBtn" disabled>제출</button>
-      <p class="hint">제출하면 선생님 확인 뒤 점수·피드백이 공개됩니다.</p>
+      <p class="hint">제출하면 선생님 확인 뒤 점수·피드백을 볼 수 있어요.</p>
     </section>`;
 }
 

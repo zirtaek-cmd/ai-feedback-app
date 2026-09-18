@@ -105,7 +105,7 @@ async function switchTab(tab) {
       <div class="grade-bar">
         <button class="btn primary" id="gradeBtn">지금 채점하기</button>
         <span class="muted small" id="gradeStatus"></span>
-        <span class="muted small">평일 16:30~02:00, 주말 09:00~02:00에는 서버가 5분마다 자동 채점·공개합니다(확인 필요 건은 검토 대기).</span>
+        <span class="muted small">평일 16:30~02:00, 주말 09:00~02:00에는 서버가 5분마다 자동으로 채점을 완료합니다(확인 필요 건은 검토 대기).</span>
       </div>
       <div class="layout">
         <aside class="sidebar" id="t-list"></aside>
@@ -688,7 +688,7 @@ async function runGrading() {
   if (!stillPending.empty && !inServerWindow()) runGrading();
 }
 
-const STATUS_LABEL = { submitted: "채점 대기", graded: "검토 대기", released: "공개됨", rejected: "반려됨", error: "채점 실패" };
+const STATUS_LABEL = { submitted: "채점 대기", graded: "검토 대기", released: "채점됨", rejected: "반려됨", error: "채점 실패" };
 const STATUS_CLS   = { submitted: "s-none",   graded: "s-pending",  released: "s-done", rejected: "s-rejected", error: "s-flag" };
 
 // 교사가 "과제 완료"를 누른 건은 원래 상태 대신 "완료"로 표시한다(별도 탭 없음).
@@ -1069,7 +1069,7 @@ async function selectItem(id) {
             <label class="fb-label">피드백</label>
             <textarea id="fbInput" rows="8">${escapeHtml(r.feedback || "")}</textarea>
             <div class="review-actions">
-              <button class="btn primary" id="releaseBtn">공개</button>
+              <button class="btn primary" id="releaseBtn">채점 완료</button>
               <button class="btn danger" id="rejectBtn">반려</button>
             </div>
           </div>
@@ -1165,7 +1165,7 @@ async function saveGrade(it) {
 
 async function release(it) {
   const btn = document.getElementById("releaseBtn");
-  btn.disabled = true; btn.textContent = "공개 중…";
+  btn.disabled = true; btn.textContent = "완료 처리 중…";
   try {
     const get = (k) => {
       const el = document.querySelector(`input[data-k="${k}"]`);
@@ -1191,8 +1191,8 @@ async function release(it) {
     renderList();
     selectItem(it.id);
   } catch (e) {
-    btn.disabled = false; btn.textContent = "공개";
-    alert("공개에 실패했습니다: " + e.message);
+    btn.disabled = false; btn.textContent = "채점 완료";
+    alert("채점 완료 처리에 실패했습니다: " + e.message);
   }
 }
 
