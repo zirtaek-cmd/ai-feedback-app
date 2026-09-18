@@ -2,6 +2,8 @@
 grade.py — 채점 대기 제출물을 Gemini로 채점하고, 문제없는 건은 바로 학생에게 공개한다.
 
   사용: python grade.py            (GitHub Actions 가 10분마다 실행. 로컬에서도 동일)
+                                    평일 09:00~16:15(KST)는 교사가 웹에서 직접 채점하는 시간이라
+                                    아무것도 하지 않고 끝난다(MANUAL_WINDOW, --force 참고).
         python grade.py --dry-run [제출물ID]
                                     (쓰기 없이 채점만 해 보고 결과를 출력. ID 를 주면 그 건만,
                                      안 주면 채점 대기 건 전부. 파이프라인 점검용)
@@ -9,7 +11,8 @@ grade.py — 채점 대기 제출물을 Gemini로 채점하고, 문제없는 건
     - Firebase 서비스 계정: 환경변수 FIREBASE_SERVICE_ACCOUNT_JSON(키 JSON 문자열, Actions 용)
       또는 serviceAccountKey.json 파일(로컬·gitignore)
     - GEMINI_API_KEY (Actions 는 Secrets, 로컬은 .env)
-    - 선택: GEMINI_MODEL, THROTTLE_SEC, AUTO_RELEASE("0" 이면 전부 교사 검토 대기로 둠)
+    - 선택: GEMINI_MODEL, THROTTLE_SEC, AUTO_RELEASE("0" 이면 전부 교사 검토 대기로 둠),
+            MANUAL_WINDOW(기본 "1-5 09:00-16:15", 1=월…7=일, KST. 이 시간대에는 건너뜀. "" 이면 항상 실행)
   흐름:
     submissions.status == "submitted" 조회
       → 각 제출의 pages(이미지) 또는 answerText 로드
@@ -29,6 +32,7 @@ grade.py — 채점 대기 제출물을 Gemini로 채점하고, 문제없는 건
     Google AI Studio의 rate limits 페이지에서 확인해 GEMINI_MODEL 을 맞출 것.
 """
 import os, sys, time, base64, json
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -45,6 +49,27 @@ THROTTLE_SEC   = float(os.environ.get("THROTTLE_SEC") or "5")               # �
 # 선 건은 이 값과 무관하게 항상 교사 검토 대기(graded)로 남긴다.
 AUTO_RELEASE   = (os.environ.get("AUTO_RELEASE") or "1") not in ("0", "false", "no")
 DRY_RUN        = "--dry-run" in sys.argv
+FORCE_RUN      = "--force" in sys.argv or (os.environ.get("FORCE_RUN") or "") in ("1", "true")
+# 교사가 웹에서 직접 채점하는 시간대(KST). 이 시간에는 서버 채점이 끼어들지 않는다.
+MANUAL_WINDOW  = os.environ.get("MANUAL_WINDOW", "1-5 09:00-16:15")
+KST = timezone(timedelta(hours=9))
+
+
+def in_manual_window(now=None):
+    """MANUAL_WINDOW("1-5 09:00-16:15") 안이면 True. 형식이 이상하면 False(=실행)."""
+    if not MANUAL_WINDOW.strip():
+        return False
+    try:
+        days, hours = MANUAL_WINDOW.split()
+        d1, d2 = (int(x) for x in days.split("-"))
+        h1, h2 = hours.split("-")
+        t1 = tuple(int(x) for x in h1.split(":"))
+        t2 = tuple(int(x) for x in h2.split(":"))
+    except ValueError:
+        print(f"MANUAL_WINDOW 형식 오류({MANUAL_WINDOW!r}) → 무시하고 실행")
+        return False
+    now = now or datetime.now(KST)
+    return d1 <= now.isoweekday() <= d2 and t1 <= (now.hour, now.minute) < t2
 
 # ---------- 채점 결과 스키마 ----------
 class Criterion(BaseModel):
@@ -286,6 +311,9 @@ def grade_submission(sub_id, data):
 
 
 def main():
+    if not FORCE_RUN and not DRY_RUN and in_manual_window():
+        print(f"교사 수동 채점 시간대({MANUAL_WINDOW} KST)라 건너뜀. 지금 {datetime.now(KST):%a %H:%M}")
+        return
     only_id = next((a for a in sys.argv[1:] if not a.startswith("--")), None)
     if only_id:
         snap = db.collection("submissions").document(only_id).get()

@@ -2,11 +2,10 @@ import { db } from "./firebase-init.js";
 import {
   collection, doc, query, where, orderBy, getDocs, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-// 채점은 GitHub Actions 가 grade.py 로 10분마다 서버에서 한다(브라우저에서는 하지 않는다).
-// 브라우저에 남은 Gemini 호출은 참고자료 PDF 요약뿐이다.
-import { summarizeReference } from "./grade.js";
+import { gradeImages, gradeText, summarizeReference } from "./grade.js";
 import { wireLightboxImages } from "./lightbox.js";
 
+const THROTTLE_MS = 4000; // 무료 등급 RPM 대응
 
 // 채점 초안(reviews) 문서 키. 제출물 ID로 키를 잡으면 학생이 재제출할 때마다
 // (새 제출물 = 새 ID) 이전 초안이 짝을 잃고 영구히 남는다. 학생+학습지로 키를 잡으면
@@ -17,6 +16,7 @@ function reviewKey(sub) {
 
 let state = { items: [], selected: null, tab: "review" };
 let unsubscribeItems = null;
+let isGrading = false;
 let rosterMap = {};        // studentEmail -> { class, number }
 let worksheetOrderMap = {}; // worksheetId  -> order
 let worksheetTitleMap = {}; // worksheetId  -> title (목록의 학습지 그룹 제목)
@@ -78,13 +78,15 @@ async function switchTab(tab) {
   if (tab === "review" || tab === "completed") {
     body.innerHTML = `
       ${tab === "review" ? `<div class="grade-bar">
-        <span class="muted small">채점은 서버에서 10분마다 자동으로 실행되고, 문제없는 건은 바로 학생에게 공개됩니다.
-        "확인 필요" 표시가 붙은 건만 검토한 뒤 공개하세요.</span>
+        <button class="btn primary" id="gradeBtn">지금 채점하기</button>
+        <span class="muted small" id="gradeStatus"></span>
+        <span class="muted small">평일 09:00~16:15 외 시간과 주말에는 서버가 10분마다 자동 채점·공개합니다(확인 필요 건은 검토 대기).</span>
       </div>` : ""}
       <div class="layout">
         <aside class="sidebar" id="t-list"></aside>
         <main class="main" id="t-main"><p class="muted center">왼쪽에서 ${tab === "review" ? "검토할" : "확인할"} 제출물을 선택하세요.</p></main>
       </div>`;
+    if (tab === "review") document.getElementById("gradeBtn").addEventListener("click", runGrading);
     // 검토 탭과 완료 탭은 같은 제출물 목록을 필터만 달리해서 쓴다. 이미 구독 중이면
     // 끊었다 다시 붙이지 않는다(재구독은 목록 전체를 다시 읽어올 수 있어 비싸다).
     if (unsubscribeItems) renderList();
@@ -142,6 +144,12 @@ function startListening() {
     });
     state.items = items;
     renderList();
+
+    if (isGrading) return;
+
+    // 새로 제출된(=아직 채점 전인) 건이 있으면 버튼을 누른 것처럼 자동 채점한다.
+    // 관리자 화면이 열려 있는 동안만 동작한다.
+    if (items.some((it) => it.status === "submitted")) runGrading();
   });
 }
 
@@ -515,17 +523,36 @@ function toFlatGrade(g) {
   };
 }
 
-// 재채점은 브라우저가 직접 하지 않고, 제출물을 다시 채점 대기(submitted)로 돌려 서버(grade.py)가
-// 다음 실행에서 처리하게 한다. regradeSource 로 무엇을 읽어 채점할지 알려 준다.
-// source: "text"  = 저장된 판독 문장으로 채점(기본, 토큰 절약)
+// 실제 재채점 로직만 수행한다(DOM 조작 없음) — 버튼 클릭과 자동 재채점 양쪽에서 공용으로 쓴다.
+// source: "text" = 저장된 판독 문장으로 채점(기본, 토큰 절약)
 //         "photo" = 사진을 다시 읽어서 채점(학생이 문장을 고쳤을 때 원본 확인용)
-// 처리될 때까지(보통 10분 이내) 학생 화면에는 "채점 대기"로 보이고 이전 점수는 잠시 가려진다.
 async function performRegrade(it, source = "text") {
+  const wsSnap = await getDoc(doc(db, "worksheets", it.worksheetId));
+  const wsData = wsSnap.exists() ? wsSnap.data() : {};
+  let g;
+  if (it.answerType === "text") {
+    g = await gradeText(wsData.problem, it.answerText || "", wsData.referenceMaterial);
+  } else if (source === "text" && it.recognizedText) {
+    // 이미 인식된 문장이 있으면 이미지를 다시 보내지 않고 텍스트로 재채점(토큰 절약).
+    g = await gradeText(wsData.problem, it.recognizedText, wsData.referenceMaterial);
+  } else {
+    // 사진 재판독 요청이거나, 인식된 문장이 없는(이 기능 이전에 채점된) 예전 항목.
+    const imgs = await loadPageImages(it.id);
+    if (!imgs.length) throw new Error("이미지 없음");
+    g = await gradeImages(imgs, wsData.referenceMaterial);
+  }
+  await setDoc(doc(db, "reviews", reviewKey(it)), g);
+  const flat = toFlatGrade(g);
   await updateDoc(doc(db, "submissions", it.id), {
-    status: "submitted", regradeSource: source, gradeError: null,
+    grade: flat, feedback: g.feedback, recognizedText: g.recognizedText,
+    gradedAt: serverTimestamp(), reviewFlag: !!g.reviewFlag, gradeError: null,
+    recognizedEditedBy: null,
   });
-  it.status = "submitted";
-  it.regradeSource = source;
+  it.grade = flat;
+  it.feedback = g.feedback;
+  it.recognizedText = g.recognizedText;
+  it.reviewFlag = !!g.reviewFlag;
+  it.review = g;
 }
 
 // 채점 실패(error)한 건을 다시 채점 대기(submitted)로 되돌린다 — 채점 큐가 다시 집어간다.
@@ -547,20 +574,93 @@ async function retryGrading(it) {
 // "재채점" 버튼 클릭 핸들러: 확인창 + 버튼 로딩 상태 표시 후 performRegrade 실행.
 async function regradeItem(it, source = "text", btnId = "regradeBtn") {
   const what = source === "photo" ? "사진을 다시 읽어서" : "저장된 문장으로";
-  if (!confirm(`${it.worksheetId} · ${it.studentEmail} 항목을 ${what} 다시 채점할까요?\n다음 자동 채점(10분 이내)에서 처리되며, 기존 점수·피드백은 새 결과로 덮어써집니다.\n처리될 때까지 학생에게는 "채점 대기"로 보입니다.`)) return;
+  if (!confirm(`${it.worksheetId} · ${it.studentEmail} 항목을 ${what} 다시 채점할까요?\n기존 점수·피드백이 새 결과로 덮어써집니다.`)) return;
   const btn = document.getElementById(btnId);
   const label = btn.textContent;
   btn.disabled = true;
-  btn.textContent = "요청 중…";
+  btn.textContent = "재채점 중…";
   try {
     await performRegrade(it, source);
-    renderList();
     selectItem(it.id);
   } catch (e) {
     btn.disabled = false;
     btn.textContent = label;
     alert("재채점에 실패했습니다: " + e.message);
   }
+}
+
+async function runGrading() {
+  if (isGrading) return; // 이미 채점 중이면(자동/수동 무관) 중복 실행 방지
+  isGrading = true;
+  // 채점 버튼/상태 표시는 "제출물 검토" 탭에만 있다. 완료 탭이나 다른 탭에 있는 동안
+  // 자동 채점이 돌 수 있으므로 없을 때를 대비한다.
+  const btn = document.getElementById("gradeBtn");
+  const statusEl = document.getElementById("gradeStatus");
+  const setStatus = (t) => { if (statusEl) statusEl.textContent = t; };
+  if (btn) btn.disabled = true;
+  try {
+    const snap = await getDocs(query(collection(db, "submissions"), where("status", "==", "submitted")));
+    const subs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    if (!subs.length) {
+      setStatus("채점할 새 제출물이 없습니다.");
+      return;
+    }
+    let done = 0, flagged = 0, errors = 0;
+    for (const s of subs) {
+      setStatus(`채점 중… (${done + errors + 1}/${subs.length})`);
+      try {
+        const wsSnap = await getDoc(doc(db, "worksheets", s.worksheetId));
+        const wsData = wsSnap.exists() ? wsSnap.data() : {};
+        let g;
+        if (s.answerType === "text") {
+          if (!s.answerText) throw new Error("답안 텍스트 없음");
+          g = await gradeText(wsData.problem, s.answerText, wsData.referenceMaterial);
+        } else {
+          const imgs = await loadPageImages(s.id);
+          if (!imgs.length) throw new Error("이미지 없음");
+          g = await gradeImages(imgs, wsData.referenceMaterial);
+        }
+        await setDoc(doc(db, "reviews", reviewKey(s)), g);
+
+        // 채점 결과는 항상 교사 검토 대기(graded)로 둔다 — 채점 모델이 틀릴 수 있으므로
+        // 교사가 확인하고 공개해야 학생에게 점수가 보인다(grade.py와 동일한 정책).
+        // reviewFlag는 목록 배지에 쓰려고 제출물에도 복사해둔다(점수는 공개 전까지 복사 안 함).
+        await updateDoc(doc(db, "submissions", s.id), {
+          status: "graded",
+          gradedAt: serverTimestamp(),
+          reviewFlag: !!g.reviewFlag,
+          gradeError: null,
+        });
+        if (g.reviewFlag) flagged++;
+        done++;
+      } catch (e) {
+        errors++;
+        console.error(`[채점 오류] ${s.id}:`, e);
+        // 실패한 건을 submitted로 두면 아래 재시도에서 무한히 다시 채점하게 된다.
+        // error 상태로 표시해 큐에서 빼고, 교사가 화면에서 사유를 보고 재시도하게 한다.
+        try {
+          await updateDoc(doc(db, "submissions", s.id), {
+            status: "error", gradeError: String(e.message || e).slice(0, 300),
+          });
+        } catch (_) { /* 상태 기록 실패는 무시 */ }
+      }
+      if (subs.indexOf(s) < subs.length - 1) {
+        await new Promise((r) => setTimeout(r, THROTTLE_MS));
+      }
+    }
+    setStatus(`채점 완료: ${done}건 (확인 필요 ${flagged}건, 오류 ${errors}건)`);
+    // 목록은 실시간 구독(onSnapshot)이 자동으로 갱신한다.
+  } catch (e) {
+    setStatus("채점 실패: " + e.message);
+  } finally {
+    if (btn) btn.disabled = false;
+    isGrading = false;
+  }
+
+  // 채점 도중 새로 제출된 건이 있으면(자동 트리거가 "채점 중"이라 건너뛰었을 수 있음) 이어서 채점한다.
+  // 실패한 건은 error 상태라 이 쿼리에 안 잡히므로 무한 반복되지 않는다.
+  const stillPending = await getDocs(query(collection(db, "submissions"), where("status", "==", "submitted")));
+  if (!stillPending.empty) runGrading();
 }
 
 const STATUS_LABEL = { submitted: "채점 대기", graded: "검토 대기", released: "공개됨", rejected: "반려됨", error: "채점 실패" };
@@ -673,7 +773,7 @@ async function selectItem(id) {
     main.innerHTML = `${header}
       <section class="card">
         <h3>제출 답안</h3>${imgs}
-        <p class="muted" style="margin-top:12px">${it.regradeSource ? "재채점 요청됨. " : ""}자동 채점 대기 중입니다(보통 10분 이내). 문제없으면 바로 공개되고, 확인이 필요한 건만 여기 검토 대기로 남습니다.</p>
+        <p class="muted" style="margin-top:12px">아직 채점 전입니다. 위의 "지금 채점하기" 버튼을 눌러 채점하세요.</p>
       </section>`;
   } else if (it.status === "error") {
     main.innerHTML = `${header}

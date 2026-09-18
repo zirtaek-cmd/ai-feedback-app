@@ -41,11 +41,13 @@ Wrks 에이전트 없이 직접 명령어로 배포할 때만 필요합니다.
 8. **관리자 설정**: `seed/admins.json`에 등록한 계정으로 웹에 1회 로그인 → `python seed_import.py` 재실행 → 재로그인.
 
 ## 운영 루틴
-학생 제출 → GitHub Actions 가 10분마다 `grade.py` 실행(채점) → 문제없는 건은 바로 학생에게 공개,
-"확인 필요" 건만 교사 화면에서 검토·공개 → 학생 확인. 교사 페이지를 열어 둘 필요가 없다.
+- **평일 09:00~16:15**: 교사가 웹 교사 화면에서 직접 채점("지금 채점하기", 화면이 열려 있으면 자동) → 검토 → 공개.
+- **그 외 시간·주말**: GitHub Actions 가 10분마다 `grade.py` 실행 → 문제없는 건은 바로 학생에게 공개,
+  "확인 필요" 건만 검토 대기로 남김 → 다음 날 교사가 검토·공개.
 
 ## 자동 채점 (GitHub Actions) 설정
-`.github/workflows/grade.yml` 이 10분마다 `grade.py` 를 돌린다. 한 번만 설정하면 된다.
+`.github/workflows/grade.yml` 이 10분마다 `grade.py` 를 돌린다. 평일 09:00~16:15(KST)에는 아무것도 하지 않고
+끝나며(`MANUAL_WINDOW` 변수로 조정), 그 시간대에 강제로 돌리려면 "Run workflow" 에서 force 를 true 로 준다. 한 번만 설정하면 된다.
 
 1. **Firestore 전용 서비스 계정 만들기** — Google Cloud 콘솔 → IAM 및 관리자 → 서비스 계정 → 만들기.
    역할은 `Cloud Datastore 사용자` 하나만 준다(프로젝트 전체 권한인 기본 키를 쓰지 말 것).
@@ -54,7 +56,8 @@ Wrks 에이전트 없이 직접 명령어로 배포할 때만 필요합니다.
    - `FIREBASE_SERVICE_ACCOUNT_JSON`: 1번에서 받은 JSON 파일 내용 전체를 그대로 붙여 넣기
    - `GEMINI_API_KEY`: Google AI Studio 키
 3. **(선택) Variables** — 같은 화면의 Variables 탭. 없으면 기본값을 쓴다.
-   `GEMINI_MODEL`(기본 gemini-3.5-flash-lite), `AUTO_RELEASE`(`0` 이면 전부 교사 검토 대기), `THROTTLE_SEC`(기본 5)
+   `GEMINI_MODEL`(기본 gemini-3.5-flash-lite), `AUTO_RELEASE`(`0` 이면 전부 교사 검토 대기), `THROTTLE_SEC`(기본 5),
+   `MANUAL_WINDOW`(기본 `1-5 09:00-16:15`, 1=월…7=일, KST)
 4. **저장소 Actions 설정** — Settings → Actions → General: "Allow all actions" 그대로, Fork pull request workflows 는
    "Require approval for all outside collaborators" 로. 협업자는 본인 계정만 둔다.
 5. Actions 탭 → grade → "Run workflow" 로 한 번 수동 실행해 초록불을 확인한다.
@@ -67,8 +70,9 @@ Wrks 에이전트 없이 직접 명령어로 배포할 때만 필요합니다.
   Google Cloud 콘솔에서 이 키에 HTTP 리퍼러 제한(배포 도메인만)과 API 제한(Generative Language API만)을 걸어 둘 것.
 
 ## 데이터 상태
-`submitted`(제출·재채점 대기) → `released`(공개, 학생 열람). 확인이 필요한 건만 `graded`(채점됨, 학생 비공개)에 머문다.
-채점 실패는 `error`(교사 화면에서 "다시 채점"). 채점 초안은 학생이 못 읽는 `reviews/` 에 저장되고, **공개 시에만** 확정본이 `submissions/` 로 복사됨.
+`submitted`(제출) → `graded`(채점됨, 학생 비공개) → `released`(공개, 학생 열람). 서버 자동 채점은 확인 필요 건이 아니면
+`graded` 를 거치지 않고 바로 `released` 로 간다. 채점 실패는 `error`(교사 화면에서 "다시 채점").
+채점 초안은 학생이 못 읽는 `reviews/` 에 저장되고, **공개 시에만** 확정본이 `submissions/` 로 복사됨.
 
 자세한 내용은 `docs/SETUP_AND_BUILD_GUIDE.md` 참고.
 
