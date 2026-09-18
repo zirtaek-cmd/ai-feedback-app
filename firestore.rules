@@ -21,8 +21,8 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // 제출물: 본인 것만 생성/읽기. 채점 전(submitted) 취소, 공개된(released) 건 재제출 시
-    // 이전 자료 자동 삭제를 위해 본인이 삭제 가능. 그 외 수정(=공개 처리 등)은 관리자만.
+    // 제출물: 본인 것만 생성/읽기. 채점 전(submitted) 취소, 공개(released)·반려(rejected)된
+    // 건 재제출 시 이전 자료 자동 삭제를 위해 본인이 삭제 가능. 그 외 수정(=공개 처리 등)은 관리자만.
     match /submissions/{submissionId} {
       allow read:   if isAdmin() ||
                        (isSignedIn() && resource.data.studentUid == request.auth.uid);
@@ -35,10 +35,11 @@ service cloud.firestore {
                         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["recognizedText"]));
       allow delete: if isAdmin() ||
                        (isSignedIn() && resource.data.studentUid == request.auth.uid
-                        && (resource.data.status == "submitted" || resource.data.status == "released"));
+                        && (resource.data.status == "submitted" || resource.data.status == "released"
+                            || resource.data.status == "rejected"));
 
       // 이미지 페이지(1장=1문서): 본인 것만 생성/읽기. 부모 제출물을 본인이 삭제할 수 있는
-      // 상태(취소 또는 재제출로 인한 이전 자료 삭제)면 페이지도 본인이 삭제 가능.
+      // 상태(취소, 반려, 또는 재제출로 인한 이전 자료 삭제)면 페이지도 본인이 삭제 가능.
       match /pages/{pageId} {
         allow read:   if isAdmin() ||
                          (isSignedIn() && resource.data.studentUid == request.auth.uid);
@@ -48,7 +49,8 @@ service cloud.firestore {
         allow delete: if isAdmin() ||
                          (isSignedIn() && resource.data.studentUid == request.auth.uid
                           && (get(/databases/$(database)/documents/submissions/$(submissionId)).data.status == "submitted"
-                              || get(/databases/$(database)/documents/submissions/$(submissionId)).data.status == "released"));
+                              || get(/databases/$(database)/documents/submissions/$(submissionId)).data.status == "released"
+                              || get(/databases/$(database)/documents/submissions/$(submissionId)).data.status == "rejected"));
       }
     }
 

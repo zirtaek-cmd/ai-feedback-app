@@ -11,6 +11,8 @@
   --amber-soft: #fdf3e3;
   --green: #047857;
   --green-soft: #e6f4ee;
+  --red: #b42318;
+  --red-soft: #fdeceb;
   --grey-soft: #eef1f4;
   --radius: 12px;
   --shadow: 0 1px 2px rgba(27, 31, 42, .06), 0 4px 16px rgba(27, 31, 42, .05);
@@ -58,6 +60,9 @@ body {
 .btn.primary:disabled { background: #b9bdd6; cursor: not-allowed; }
 .btn.ghost { background: transparent; color: var(--muted); padding: 6px 10px; }
 .btn.ghost:hover { color: var(--ink); }
+.btn.danger { background: var(--red-soft); color: var(--red); }
+.btn.danger:hover { background: #fbd9d5; }
+.btn.danger:disabled { opacity: .6; cursor: not-allowed; }
 
 /* ---------- 상단바 ---------- */
 .topbar {
@@ -113,6 +118,7 @@ body {
 .s-pending { background: var(--amber-soft); color: var(--amber); }
 .s-done { background: var(--green-soft); color: var(--green); }
 .s-flag { background: #fdeceb; color: #b42318; }
+.s-rejected { background: var(--red-soft); color: var(--red); }
 
 /* ---------- 메인 콘텐츠 ---------- */
 .main-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
@@ -195,10 +201,11 @@ body {
 /* 검토 중 */
 .pending-note { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; justify-content: center; }
 .pending-note .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--amber); }
+.pending-note.rejected .dot { background: var(--red); }
 
 /* 점수/피드백 */
+.score-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .score { display: flex; align-items: baseline; gap: 6px; }
-.score #regradeBtn { margin-left: auto; align-self: center; }
 .score span { font-size: 40px; font-weight: 800; color: var(--indigo-dark); letter-spacing: -.02em; }
 .score small { color: var(--muted); }
 .crits { margin: 12px 0 16px; border-top: 1px solid var(--line); }
@@ -218,6 +225,7 @@ body {
 }
 .crit-edit input:focus, .total-row input:focus, textarea:focus { outline: 2px solid var(--indigo-soft); border-color: var(--indigo); }
 .total-row { margin: 4px 0 14px; max-width: 160px; }
+.review-actions { display: flex; gap: 8px; }
 .review-form textarea { resize: vertical; margin-bottom: 14px; }
 .fb-label { margin-top: 2px; }
 

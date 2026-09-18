@@ -10,6 +10,22 @@ const THROTTLE_MS = 4000; // 무료 등급 RPM 대응
 let state = { items: [], selected: null, tab: "review" };
 let unsubscribeItems = null;
 let isGrading = false;
+let rosterMap = {};        // studentEmail -> { class, number }
+let worksheetOrderMap = {}; // worksheetId  -> order
+
+// 목록 정렬·그룹핑(반별 구역, 학습지 번호순)에 쓸 명단/학습지 순서를 불러온다.
+// 매 탭 전환마다 새로 불러오되(한 번 실패하면 계속 비어있는 캐시 버그를 피하기 위해
+// 영구 캐시는 두지 않는다), 제출물 구독과 동시에 진행해 기다리는 시간을 줄인다.
+async function loadRosterAndWorksheets() {
+  const [rosterSnap, wsSnap] = await Promise.all([
+    getDocs(collection(db, "roster")),
+    getDocs(collection(db, "worksheets")),
+  ]);
+  rosterMap = {};
+  rosterSnap.docs.forEach((d) => { rosterMap[d.id] = d.data(); });
+  worksheetOrderMap = {};
+  wsSnap.docs.forEach((d) => { worksheetOrderMap[d.id] = d.data().order ?? 0; });
+}
 
 export async function renderTeacher(access) {
   const root = document.getElementById("app-root");
@@ -65,7 +81,13 @@ function stopListening() {
 // 새로고침 없이 자동으로 목록에 반영된다.
 function startListening() {
   stopListening();
+  // 명단/학습지 로딩과 제출물 구독을 동시에 시작한다(순서대로 기다리지 않아 더 빠름).
+  // 명단 로딩이 실패해도 목록 자체는 떠야 하므로 실패를 여기서 삼킨다.
+  const rosterReady = loadRosterAndWorksheets().catch((e) => {
+    console.error("[명단/학습지 순서 로드 실패]", e);
+  });
   unsubscribeItems = onSnapshot(collection(db, "submissions"), async (snap) => {
+    await rosterReady;
     let items = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((s) => !s.archived);
 
     // (학생,학습지)별 최신 회차만 남김
@@ -76,21 +98,22 @@ function startListening() {
     });
     items = Object.values(latest);
 
-    // 각 항목의 채점 초안(reviews) 로드 (있으면)
-    for (const it of items) {
+    // 각 항목의 채점 초안(reviews) 로드 (있으면) — 항목이 많아도 느려지지 않도록 병렬로 조회.
+    await Promise.all(items.map(async (it) => {
       const r = await getDoc(doc(db, "reviews", it.id));
       it.review = r.exists() ? r.data() : null;
-    }
-    // 확인 필요 → 검토 대기 → 채점 대기 → 공개됨 순, 그다음 학습지·이메일 순
-    const order = { graded: 0, submitted: 1, released: 2 };
+    }));
+    // 반별 구역으로 묶고, 구역 안에서는 학습지 번호순 → 학생 번호순으로 정렬한다.
     items.sort((a, b) => {
-      const fa = a.review?.reviewFlag ? 0 : 1;
-      const fb = b.review?.reviewFlag ? 0 : 1;
-      if (fa !== fb) return fa - fb;
-      const oa = order[a.status] ?? 3;
-      const ob = order[b.status] ?? 3;
+      const ca = rosterMap[a.studentEmail]?.class ?? 999;
+      const cb = rosterMap[b.studentEmail]?.class ?? 999;
+      if (ca !== cb) return ca - cb;
+      const oa = worksheetOrderMap[a.worksheetId] ?? 999;
+      const ob = worksheetOrderMap[b.worksheetId] ?? 999;
       if (oa !== ob) return oa - ob;
-      return (a.worksheetId + a.studentEmail).localeCompare(b.worksheetId + b.studentEmail);
+      const na = rosterMap[a.studentEmail]?.number ?? 999;
+      const nb = rosterMap[b.studentEmail]?.number ?? 999;
+      return na - nb;
     });
     state.items = items;
     renderList();
@@ -397,10 +420,13 @@ async function selectRosterWorksheet(pageState, code) {
         </div>
       </section>`;
   } else {
+    const note = sub.status === "submitted" ? "아직 채점 전입니다."
+      : sub.status === "rejected" ? `반려됨${sub.rejectReason ? ` — ${escapeHtml(sub.rejectReason)}` : ""}`
+      : "검토 대기 중입니다.";
     body += `
       <section class="card">
         <h3>제출 답안</h3>${imgs}
-        <p class="muted" style="margin-top:12px">${sub.status === "submitted" ? "아직 채점 전입니다." : "검토 대기 중입니다."}</p>
+        <p class="muted" style="margin-top:12px">${note}</p>
       </section>`;
   }
 
@@ -420,6 +446,18 @@ function fileToBase64(file) {
 async function loadPageImages(subId) {
   const snap = await getDocs(query(collection(db, "submissions", subId, "pages"), orderBy("order")));
   return snap.docs.map((d) => d.data().imageBase64).filter(Boolean);
+}
+
+// 항목별 점수 입력칸 하나. score는 순수 숫자(공개된 채점 결과)이거나 {score, note}
+// 형태(AI 채점 초안)일 수 있어 둘 다 받는다.
+function critEditRow(label, max, key, score, note) {
+  const val = (score && typeof score === "object") ? score.score : score;
+  return `
+    <div class="crit-edit">
+      <label>${label} <small>/ ${max}</small></label>
+      <input type="number" min="0" max="${max}" value="${val ?? 0}" data-k="${key}">
+      ${note ? `<p class="muted small">${escapeHtml(note)}</p>` : ""}
+    </div>`;
 }
 
 function toFlatGrade(g) {
@@ -544,8 +582,8 @@ async function runGrading() {
   if (!stillPending.empty) runGrading();
 }
 
-const STATUS_LABEL = { submitted: "채점 대기", graded: "검토 대기", released: "공개됨" };
-const STATUS_CLS   = { submitted: "s-none",   graded: "s-pending",  released: "s-done" };
+const STATUS_LABEL = { submitted: "채점 대기", graded: "검토 대기", released: "공개됨", rejected: "반려됨" };
+const STATUS_CLS   = { submitted: "s-none",   graded: "s-pending",  released: "s-done", rejected: "s-rejected" };
 
 function renderList() {
   const list = document.getElementById("t-list");
@@ -554,17 +592,35 @@ function renderList() {
     list.innerHTML = `<p class="muted center">${state.tab === "completed" ? "완료된 과제가 없습니다." : "제출물이 없습니다."}</p>`;
     return;
   }
-  list.innerHTML = visible.map((it) => {
-    const flag = it.review?.reviewFlag ? `<span class="badge s-flag">확인 필요</span>` : "";
-    const active = state.selected === it.id ? "active" : "";
-    const score = it.status === "released" ? it.grade?.total : it.review?.total;
-    return `<button class="ws-item ${active}" data-id="${it.id}">
-        <span class="ws-code">${it.worksheetId} · ${it.studentEmail}</span>
-        <span>${score ?? "-"}점
-          <span class="badge ${STATUS_CLS[it.status] || "s-none"}">${STATUS_LABEL[it.status] || it.status}</span>
-          ${flag}
-        </span>
-      </button>`;
+
+  // 이미 반→학습지순으로 정렬된 목록(state.items)을 반 단위 구역으로 묶어서 그린다.
+  const byClass = {};
+  visible.forEach((it) => {
+    const cls = rosterMap[it.studentEmail]?.class ?? "미확인";
+    (byClass[cls] ||= []).push(it);
+  });
+  const classes = Object.keys(byClass).sort((a, b) => {
+    if (a === "미확인") return 1;
+    if (b === "미확인") return -1;
+    return Number(a) - Number(b);
+  });
+
+  list.innerHTML = classes.map((cls) => {
+    const items = byClass[cls].map((it) => {
+      const flag = it.review?.reviewFlag ? `<span class="badge s-flag">확인 필요</span>` : "";
+      const active = state.selected === it.id ? "active" : "";
+      const score = it.status === "released" ? it.grade?.total : it.review?.total;
+      const num = rosterMap[it.studentEmail]?.number;
+      const who = num ? `${num}번 ${it.studentEmail}` : it.studentEmail;
+      return `<button class="ws-item ${active}" data-id="${it.id}">
+          <span class="ws-code">${it.worksheetId} · ${who}</span>
+          <span>${score ?? "-"}점
+            <span class="badge ${STATUS_CLS[it.status] || "s-none"}">${STATUS_LABEL[it.status] || it.status}</span>
+            ${flag}
+          </span>
+        </button>`;
+    }).join("");
+    return `<div class="unit"><div class="unit-title">${cls === "미확인" ? cls : cls + "반"}</div>${items}</div>`;
   }).join("");
   list.querySelectorAll(".ws-item").forEach((b) =>
     b.addEventListener("click", () => selectItem(b.dataset.id))
@@ -617,11 +673,15 @@ async function selectItem(id) {
         <div class="two">
           <div><h3>제출 답안</h3>${imgs}${recognizedSection}</div>
           <div>
-            <div class="score">
-              <span>${g.total ?? "-"}</span><small>/ 100</small>
-              <button class="btn ghost" id="regradeBtn">재채점</button>
+            <div class="score-head">
+              <div class="score"><span>${g.total ?? "-"}</span><small>/ 100</small></div>
+              <div class="review-actions">
+                <button class="btn ghost" id="regradeBtn">재채점</button>
+                <button class="btn ghost" id="editScoreBtn">점수 수정</button>
+                <button class="btn danger" id="rejectBtn">반려</button>
+              </div>
             </div>
-            <div class="crits">${rows}</div>
+            <div id="scoreView"><div class="crits">${rows}</div></div>
             <div class="fb-head">
               <h4>피드백</h4>
               <button class="btn ghost" id="editFeedbackBtn">수정</button>
@@ -630,6 +690,29 @@ async function selectItem(id) {
           </div>
         </div>
       </section>`;
+
+    document.getElementById("editScoreBtn").addEventListener("click", () => {
+      document.getElementById("scoreView").innerHTML = `
+        <div class="crit-grid">
+          ${critEditRow("핵심 개념 이해", 40, "concept", g.concept)}
+          ${critEditRow("논리적 연결", 25, "logic", g.logic)}
+          ${critEditRow("근거·예시", 20, "evidence", g.evidence)}
+          ${critEditRow("완성된 문장형식으로 작성", 15, "expression", g.expression)}
+        </div>
+        <div class="total-row">
+          <label>총점 <small>/ 100</small></label>
+          <input type="number" id="totalInput" min="0" max="100" value="${g.total ?? 0}">
+        </div>
+        <div class="fb-actions">
+          <button class="btn primary" id="saveScoreBtn">저장</button>
+          <button class="btn ghost" id="cancelScoreBtn">취소</button>
+        </div>`;
+      wireTotalAutoCalc();
+      document.getElementById("cancelScoreBtn").addEventListener("click", () => selectItem(it.id));
+      document.getElementById("saveScoreBtn").addEventListener("click", () => saveGrade(it));
+    });
+
+    document.getElementById("rejectBtn").addEventListener("click", () => rejectSubmission(it));
 
     document.getElementById("editFeedbackBtn").addEventListener("click", () => {
       document.getElementById("feedbackView").innerHTML = `
@@ -681,14 +764,15 @@ async function selectItem(id) {
     }
 
     document.getElementById("regradeBtn").addEventListener("click", () => regradeItem(it));
+  } else if (it.status === "rejected") {
+    main.innerHTML = `${header}
+      <section class="card">
+        <h3>제출 답안</h3>${imgs}
+        <p class="muted small" style="margin-top:12px">반려 사유: ${escapeHtml(it.rejectReason || "(사유 없음)")}</p>
+        <p class="muted" style="margin-top:12px">학생에게 반려되어 다시 제출을 기다리는 중입니다.</p>
+      </section>`;
   } else {
     const r = it.review || {};
-    const crit = (label, obj, max, key) => `
-        <div class="crit-edit">
-          <label>${label} <small>/ ${max}</small></label>
-          <input type="number" min="0" max="${max}" value="${obj?.score ?? 0}" data-k="${key}">
-          <p class="muted small">${escapeHtml(obj?.note || "")}</p>
-        </div>`;
 
     const recognizedEditSection = it.answerType !== "text" ? `
       <div class="recognized">
@@ -702,10 +786,10 @@ async function selectItem(id) {
           <div><h3>제출 답안</h3>${imgs}${recognizedEditSection}</div>
           <div class="review-form">
             <div class="crit-grid">
-              ${crit("핵심 개념 이해", r.concept, 40, "concept")}
-              ${crit("논리적 연결", r.logic, 25, "logic")}
-              ${crit("근거·예시", r.evidence, 20, "evidence")}
-              ${crit("완성된 문장형식으로 작성", r.expression, 15, "expression")}
+              ${critEditRow("핵심 개념 이해", 40, "concept", r.concept, r.concept?.note)}
+              ${critEditRow("논리적 연결", 25, "logic", r.logic, r.logic?.note)}
+              ${critEditRow("근거·예시", 20, "evidence", r.evidence, r.evidence?.note)}
+              ${critEditRow("완성된 문장형식으로 작성", 15, "expression", r.expression, r.expression?.note)}
             </div>
             <div class="total-row">
               <label>총점 <small>/ 100</small></label>
@@ -713,12 +797,17 @@ async function selectItem(id) {
             </div>
             <label class="fb-label">피드백</label>
             <textarea id="fbInput" rows="8">${escapeHtml(r.feedback || "")}</textarea>
-            <button class="btn primary" id="releaseBtn">공개</button>
+            <div class="review-actions">
+              <button class="btn primary" id="releaseBtn">공개</button>
+              <button class="btn danger" id="rejectBtn">반려</button>
+            </div>
           </div>
         </div>
       </section>`;
 
+    wireTotalAutoCalc();
     document.getElementById("releaseBtn").addEventListener("click", () => release(it));
+    document.getElementById("rejectBtn").addEventListener("click", () => rejectSubmission(it));
   }
 
   document.getElementById("deleteBtn").addEventListener("click", () => deleteItem(it));
@@ -740,6 +829,68 @@ async function toggleComplete(it) {
   } catch (e) {
     btn.disabled = false;
     alert("처리에 실패했습니다: " + e.message);
+  }
+}
+
+// 항목별 점수(concept/logic/evidence/expression)를 고치면 총점 입력칸을 그 합으로
+// 자동 갱신한다. 총점을 직접 덮어쓸 수도 있지만, 항목 점수를 다시 건드리면 합으로
+// 되돌아간다.
+function wireTotalAutoCalc() {
+  const critInputs = document.querySelectorAll('.crit-edit input[data-k]');
+  const totalInput = document.getElementById("totalInput");
+  if (!critInputs.length || !totalInput) return;
+  const recalc = () => {
+    let sum = 0;
+    critInputs.forEach((el) => { sum += Number(el.value) || 0; });
+    totalInput.value = sum;
+  };
+  critInputs.forEach((el) => el.addEventListener("input", recalc));
+}
+
+// "반려" 버튼 클릭 핸들러: 사유를 입력받아 상태를 rejected로 바꾼다.
+// 학생 화면에서는 이 상태가 "released"와 동일하게 취급되어 업로드 폼이 다시
+// 열리고, 새로 제출하면(student.js) 반려된 이전 자료가 자동으로 삭제된다.
+async function rejectSubmission(it) {
+  const reason = prompt("반려 사유를 입력하세요 (학생에게 표시됩니다. 비워두면 사유 없이 반려)", "");
+  if (reason === null) return; // 취소
+  if (!confirm(`${it.worksheetId} · ${it.studentEmail} 제출물을 반려할까요?\n학생이 처음부터 다시 제출해야 합니다.`)) return;
+  const btn = document.getElementById("rejectBtn");
+  btn.disabled = true; btn.textContent = "반려 중…";
+  try {
+    await updateDoc(doc(db, "submissions", it.id), {
+      status: "rejected", rejectReason: reason, rejectedAt: serverTimestamp(),
+    });
+    it.status = "rejected";
+    it.rejectReason = reason;
+    renderList();
+    selectItem(it.id);
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "반려";
+    alert("반려 처리에 실패했습니다: " + e.message);
+  }
+}
+
+// 이미 공개된(released) 항목의 점수만 고쳐서 저장한다(상태·공개일은 그대로).
+async function saveGrade(it) {
+  const btn = document.getElementById("saveScoreBtn");
+  btn.disabled = true; btn.textContent = "저장 중…";
+  try {
+    const get = (k) => {
+      const el = document.querySelector(`input[data-k="${k}"]`);
+      return el ? Number(el.value) : null;
+    };
+    const grade = {
+      total: Number(document.getElementById("totalInput").value),
+      concept: get("concept"), logic: get("logic"),
+      evidence: get("evidence"), expression: get("expression"),
+    };
+    await updateDoc(doc(db, "submissions", it.id), { grade });
+    it.grade = grade;
+    renderList();
+    selectItem(it.id);
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "저장";
+    alert("저장에 실패했습니다: " + e.message);
   }
 }
 

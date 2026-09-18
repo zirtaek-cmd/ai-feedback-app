@@ -13,6 +13,7 @@ const STATUS = {
   none:     { key: "none",     label: "미제출",     cls: "s-none" },
   pending:  { key: "pending",  label: "검토 중",    cls: "s-pending" },
   released: { key: "released", label: "완료",       cls: "s-done" },
+  rejected: { key: "rejected", label: "반려됨",     cls: "s-rejected" },
 };
 
 // 자유 채점: 참고자료가 등록된 단원만 고를 수 있게 학습지 코드와 순서대로 매칭.
@@ -117,7 +118,9 @@ function attemptsUsed(code) {
 function statusOf(code) {
   const s = latestSub(code);
   if (!s) return STATUS.none;
-  return s.status === "released" ? STATUS.released : STATUS.pending;
+  if (s.status === "released") return STATUS.released;
+  if (s.status === "rejected") return STATUS.rejected;
+  return STATUS.pending;
 }
 
 function renderSidebar() {
@@ -163,13 +166,14 @@ async function selectWorksheet(code) {
     body += `<section class="card"><h3>문제</h3><p class="feedback">${escapeHtml(ws.problem)}</p></section>`;
   }
 
-  // 공개된 건 재제출 횟수와 무관하게 항상 다시 제출할 수 있다("남은 제출 횟수"는
-  // 화면에만 보이는 목표치일 뿐, 실제로 더 이상의 제출을 막지는 않는다).
-  state.uploadFormRendered = !sub || sub.status === "released";
+  // 공개되었거나 반려된 건 재제출 횟수와 무관하게 항상 다시 제출할 수 있다
+  // ("남은 제출 횟수"는 화면에만 보이는 목표치일 뿐, 실제로 더 이상의 제출을 막지는 않는다).
+  state.uploadFormRendered = !sub || sub.status === "released" || sub.status === "rejected";
   state.hasDraftInput = false;
   if (state.uploadFormRendered) {
     body += uploadPanel(attempts);
-    if (sub) body += await resultPanel(sub); // 이전 공개 결과도 함께 보여줌
+    if (sub && sub.status === "released") body += await resultPanel(sub); // 이전 공개 결과도 함께 보여줌
+    if (sub && sub.status === "rejected") body += await rejectedPanel(sub); // 반려 사유 표시
   } else {
     body += await pendingPanel(sub); // 검토 중
   }
@@ -242,6 +246,20 @@ async function cancelSubmission(sub, code) {
     if (btn) { btn.disabled = false; btn.textContent = "제출 취소"; }
     alert("취소에 실패했습니다: " + e.message);
   }
+}
+
+async function rejectedPanel(sub) {
+  const content = await submittedContentHtml(sub);
+  return `<section class="card">
+      <div class="two">
+        <div><h3>이전 제출 답안</h3>${content}</div>
+        <div class="pending-note rejected">
+          <div class="dot"></div>
+          <p>선생님이 반려했습니다.${sub.rejectReason ? `<br>사유: ${escapeHtml(sub.rejectReason)}` : ""}</p>
+          <p class="muted small">아래에서 답안을 다시 제출해주세요.</p>
+        </div>
+      </div>
+    </section>`;
 }
 
 async function resultPanel(sub) {
