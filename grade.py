@@ -226,7 +226,14 @@ SUMMARY_PROMPT = """당신은 중학교 3학년 과학 교사입니다. 첨부�
 # ---------- Firebase ----------
 # Actions 에서는 키를 파일로 남기지 않고 환경변수(Secrets)로만 받는다.
 _sa_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
-_cred = credentials.Certificate(json.loads(_sa_json)) if _sa_json else credentials.Certificate("serviceAccountKey.json")
+if _sa_json:
+    _cred = credentials.Certificate(json.loads(_sa_json))
+elif os.path.exists("serviceAccountKey.json"):
+    _cred = credentials.Certificate("serviceAccountKey.json")
+else:
+    sys.exit("Firebase 서비스 계정이 없습니다. GitHub 이면 저장소 Secret 이름이 정확히 "
+             "FIREBASE_SERVICE_ACCOUNT_JSON 인지 확인하세요(값은 키 JSON 파일 내용 전체). "
+             "로컬이면 serviceAccountKey.json 을 두세요.")
 firebase_admin.initialize_app(_cred)
 db = firestore.client()
 client = genai.Client(api_key=GEMINI_API_KEY)
