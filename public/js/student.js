@@ -149,9 +149,16 @@ function renderSidebar() {
 }
 
 async function selectWorksheet(code) {
+  const ws = state.worksheets.find((w) => w.code === code);
+  if (!ws) {
+    // 선택 중이던 학습지가 비활성화되는 등 목록에서 빠진 경우 → 첫 학습지로 되돌린다.
+    state.selected = null;
+    renderSidebar();
+    if (state.worksheets[0] && state.worksheets[0].code !== code) selectWorksheet(state.worksheets[0].code);
+    return;
+  }
   state.selected = code;
   renderSidebar();
-  const ws = state.worksheets.find((w) => w.code === code);
   const sub = latestSub(code);
   const attempts = attemptsUsed(code);
   const main = document.getElementById("main");
@@ -301,11 +308,14 @@ async function submittedContentHtml(sub) {
   }
   const imgsHtml = await pagesHtml(sub.id);
   if (!sub.recognizedText) return imgsHtml;
+  // 판독 문장 수정은 보안 규칙상 공개(released)된 제출물에서만 허용된다. 반려된 건에도
+  // 이전 판독 문장이 남아 있을 수 있는데, 거기서 수정 버튼을 보여주면 저장 시 권한 오류가 난다.
+  const canEdit = sub.status === "released";
   return imgsHtml + `
     <div class="recognized">
-      <div class="fb-head"><h4>사진으로 인식한 문장</h4><button class="btn ghost" id="editRecognizedBtn">수정</button></div>
+      <div class="fb-head"><h4>사진으로 인식한 문장</h4>${canEdit ? `<button class="btn ghost" id="editRecognizedBtn">수정</button>` : ""}</div>
       <div id="recognizedView"><p class="feedback">${escapeHtml(sub.recognizedText)}</p></div>
-      <p class="muted small">사진이 잘못 읽힌 부분만 고쳐주세요. 고친다고 점수가 바로 바뀌지는 않고, 선생님이 사진과 대조한 뒤 다시 채점합니다.</p>
+      ${canEdit ? `<p class="muted small">사진이 잘못 읽힌 부분만 고쳐주세요. 고친다고 점수가 바로 바뀌지는 않고, 선생님이 사진과 대조한 뒤 다시 채점합니다.</p>` : ""}
     </div>`;
 }
 
@@ -393,12 +403,15 @@ function wireUpload(code, attempts) {
   dropBtn.addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", async () => {
     dropBtn.textContent = "압축 중…";
+    const failed = [];
     for (const f of fileInput.files) {
-      try { dataUrls.push(await compressImage(f)); } catch (_) {}
+      try { dataUrls.push(await compressImage(f)); } catch (_) { failed.push(f.name); }
     }
     previews.innerHTML = dataUrls.map((u) => `<img src="${u}" alt="미리보기">`).join("");
-    dropBtn.textContent = "사진 더 추가";
+    dropBtn.textContent = dataUrls.length ? "사진 더 추가" : "사진 선택 · 촬영 (여러 장 가능)";
+    fileInput.value = ""; // 같은 파일을 다시 골라도 change 가 발생하도록
     updateSubmitState();
+    if (failed.length) alert(`다음 사진은 불러올 수 없어 제외되었습니다(형식을 지원하지 않거나 손상됨):\n${failed.join("\n")}`);
   });
 
   answerTextEl.addEventListener("input", updateSubmitState);
@@ -503,8 +516,9 @@ async function refreshFreeformUsage() {
 }
 
 // 사용 횟수를 원자적으로 확인+증가한다. 5회 이상이면 예외를 던진다.
-// 서버 규칙에서도 "정확히 +1, 5 미만일 때만" 을 강제하므로 클라이언트 코드를
-// 조작해도 우회할 수 없다.
+// 서버 규칙에서도 "정확히 +1, 5 미만일 때만" 을 강제한다.
+// 채점이 성공한 뒤에 호출한다 — Gemini 오류·네트워크 오류로 채점이 실패했는데
+// 횟수만 깎이는 일을 막기 위해서다(한도 초과 여부는 채점 전에 따로 확인한다).
 async function reserveFreeformUsage() {
   const ref = doc(db, "freeformUsage", state.access.uid);
   return runTransaction(db, async (tx) => {
@@ -590,11 +604,14 @@ function wireFreeformUpload() {
   dropBtn.addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", async () => {
     dropBtn.textContent = "압축 중…";
+    const failed = [];
     for (const f of fileInput.files) {
-      try { dataUrls.push(await compressImage(f)); } catch (_) {}
+      try { dataUrls.push(await compressImage(f)); } catch (_) { failed.push(f.name); }
     }
     previews.innerHTML = dataUrls.map((u) => `<img src="${u}" alt="미리보기">`).join("");
-    dropBtn.textContent = "사진 더 추가";
+    dropBtn.textContent = dataUrls.length ? "사진 더 추가" : "사진 선택 · 촬영 (여러 장 가능)";
+    fileInput.value = "";
+    if (failed.length) alert(`다음 사진은 불러올 수 없어 제외되었습니다(형식을 지원하지 않거나 손상됨):\n${failed.join("\n")}`);
     submitBtn.disabled = dataUrls.length === 0 || state.freeformLeft <= 0;
     if (state.freeformLeft <= 0) submitBtn.textContent = "사용 횟수를 모두 사용했습니다";
   });
@@ -604,13 +621,16 @@ function wireFreeformUpload() {
     submitBtn.disabled = true;
     submitBtn.textContent = "채점 중…";
     try {
-      await reserveFreeformUsage(); // 한도 초과면 여기서 예외 발생, 이후 진행 안 함
+      if ((await refreshFreeformUsage()) <= 0) {
+        throw new Error(`사용 횟수(${FREEFORM_LIMIT}회)를 모두 사용했습니다.`);
+      }
 
       const unit = FREEFORM_UNITS.find((u) => u.code === unitSelect.value);
       const wsSnap = await getDoc(doc(db, "worksheets", unit.code));
       const referenceMaterial = wsSnap.exists() ? wsSnap.data().referenceMaterial : "";
 
       const g = await gradeFreeform(dataUrls, referenceMaterial);
+      await reserveFreeformUsage(); // 채점이 실제로 됐을 때만 횟수 차감
 
       const ref = await addDoc(collection(db, "freeformSubmissions"), {
         studentUid: state.access.uid,
@@ -646,6 +666,7 @@ function wireFreeformUpload() {
       submitBtn.disabled = false;
       submitBtn.textContent = "채점하기";
       alert("채점에 실패했습니다: " + e.message);
+      refreshFreeformUsage().catch(() => {}); // 횟수를 다 쓴 경우 버튼을 다시 잠근다
     }
   });
 }

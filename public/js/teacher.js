@@ -659,6 +659,7 @@ const STATUS_CLS   = { submitted: "s-none",   graded: "s-pending",  released: "s
 
 function renderList() {
   const list = document.getElementById("t-list");
+  if (!list) return; // 다른 탭으로 옮긴 뒤 뒤늦게 도착한 스냅샷
   const visible = state.items.filter((it) => !!it.completed === (state.tab === "completed"));
   if (!visible.length) {
     list.innerHTML = `<p class="muted center">${state.tab === "completed" ? "완료된 과제가 없습니다." : "제출물이 없습니다."}</p>`;
@@ -706,6 +707,7 @@ async function selectItem(id) {
   renderList();
   const it = state.items.find((x) => x.id === id);
   const main = document.getElementById("t-main");
+  if (!it || !main) return; // 클릭 직전에 목록에서 사라졌거나(학생 취소 등) 탭이 바뀐 경우
 
   // 채점 초안은 목록에서 미리 읽지 않고, 항목을 연 이 시점에 한 건만 읽는다.
   if (it.review === undefined) {
