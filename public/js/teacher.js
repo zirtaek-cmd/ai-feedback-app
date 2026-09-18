@@ -487,7 +487,7 @@ async function selectRosterWorksheet(pageState, code) {
       </section>`;
   } else {
     const note = sub.status === "submitted" ? "아직 채점 전입니다."
-      : sub.status === "rejected" ? `반려됨${sub.rejectReason ? ` — ${escapeHtml(sub.rejectReason)}` : ""}`
+      : sub.status === "rejected" ? `채점 불가${sub.rejectReason ? ` — ${escapeHtml(sub.rejectReason)}` : ""}`
       : "검토 대기 중입니다.";
     body += `
       <section class="card">
@@ -688,7 +688,7 @@ async function runGrading() {
   if (!stillPending.empty && !inServerWindow()) runGrading();
 }
 
-const STATUS_LABEL = { submitted: "채점 대기", graded: "검토 대기", released: "채점됨", rejected: "반려됨", error: "채점 실패" };
+const STATUS_LABEL = { submitted: "채점 대기", graded: "검토 대기", released: "채점됨", rejected: "채점 불가", error: "채점 실패" };
 const STATUS_CLS   = { submitted: "s-none",   graded: "s-pending",  released: "s-done", rejected: "s-rejected", error: "s-flag" };
 
 // 교사가 "과제 완료"를 누른 건은 원래 상태 대신 "완료"로 표시한다(별도 탭 없음).
@@ -938,7 +938,7 @@ async function selectItem(id) {
               <div class="review-actions">
                 ${studentEdited ? "" : `<button class="btn ghost" id="regradeBtn">재채점</button>`}
                 <button class="btn ghost" id="editScoreBtn">점수 수정</button>
-                <button class="btn danger" id="rejectBtn">반려</button>
+                <button class="btn danger" id="rejectBtn">채점 불가</button>
               </div>
             </div>
             <div id="scoreView"><div class="crits">${rows}</div></div>
@@ -1039,8 +1039,8 @@ async function selectItem(id) {
     main.innerHTML = `${header}
       <section class="card">
         <h3>제출 답안</h3>${imgs}
-        <p class="muted small" style="margin-top:12px">반려 사유: ${escapeHtml(it.rejectReason || "(사유 없음)")}</p>
-        <p class="muted" style="margin-top:12px">학생에게 반려되어 다시 제출을 기다리는 중입니다.</p>
+        <p class="muted small" style="margin-top:12px">사유: ${escapeHtml(it.rejectReason || "(사유 없음)")}</p>
+        <p class="muted" style="margin-top:12px">채점 불가로 돌려보내 다시 제출을 기다리는 중입니다. 학생의 제출 횟수는 차감되지 않습니다.</p>
       </section>`;
   } else {
     const r = it.review || {};
@@ -1070,7 +1070,7 @@ async function selectItem(id) {
             <textarea id="fbInput" rows="8">${escapeHtml(r.feedback || "")}</textarea>
             <div class="review-actions">
               <button class="btn primary" id="releaseBtn">채점 완료</button>
-              <button class="btn danger" id="rejectBtn">반려</button>
+              <button class="btn danger" id="rejectBtn">채점 불가</button>
             </div>
           </div>
         </div>
@@ -1116,15 +1116,19 @@ function wireTotalAutoCalc() {
   critInputs.forEach((el) => el.addEventListener("input", recalc));
 }
 
-// "반려" 버튼 클릭 핸들러: 사유를 입력받아 상태를 rejected로 바꾼다.
-// 학생 화면에서는 이 상태가 "released"와 동일하게 취급되어 업로드 폼이 다시
-// 열리고, 새로 제출하면(student.js) 반려된 이전 자료가 자동으로 삭제된다.
+// "채점 불가" 버튼 클릭 핸들러: 채점 자체가 불가능한 제출(엉뚱한 사진, 백지, 다른 학습지 등)을
+// 사유와 함께 학생에게 돌려보낸다(상태 rejected). "다시 써 와"는 낮은 점수+피드백으로 하고,
+// 이 버튼은 채점할 수 없는 경우에만 쓴다. 학생 화면에서는 업로드 폼이 다시 열리고,
+// 새로 제출하면(student.js) 이전 자료가 자동으로 삭제되며 제출 횟수도 차감되지 않는다.
 async function rejectSubmission(it) {
-  const reason = prompt("반려 사유를 입력하세요 (학생에게 표시됩니다. 비워두면 사유 없이 반려)", "");
+  const reason = prompt(
+    "채점할 수 없는 이유를 입력하세요 (학생에게 표시됩니다)\n예: 사진이 흐려서 글씨가 안 보임 / 다른 학습지 사진 / 백지",
+    ""
+  );
   if (reason === null) return; // 취소
-  if (!confirm(`${it.worksheetId} · ${it.studentEmail} 제출물을 반려할까요?\n학생이 처음부터 다시 제출해야 합니다.`)) return;
+  if (!confirm(`${it.worksheetId} · ${it.studentEmail} 제출물을 채점 불가로 돌려보낼까요?\n점수 없이 사유만 전달되고, 학생이 다시 제출해야 합니다(제출 횟수 차감 없음).`)) return;
   const btn = document.getElementById("rejectBtn");
-  btn.disabled = true; btn.textContent = "반려 중…";
+  btn.disabled = true; btn.textContent = "처리 중…";
   try {
     await updateDoc(doc(db, "submissions", it.id), {
       status: "rejected", rejectReason: reason, rejectedAt: serverTimestamp(), reviewFlag: false,
@@ -1134,8 +1138,8 @@ async function rejectSubmission(it) {
     renderList();
     selectItem(it.id);
   } catch (e) {
-    btn.disabled = false; btn.textContent = "반려";
-    alert("반려 처리에 실패했습니다: " + e.message);
+    btn.disabled = false; btn.textContent = "채점 불가";
+    alert("채점 불가 처리에 실패했습니다: " + e.message);
   }
 }
 

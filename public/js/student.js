@@ -14,7 +14,7 @@ const STATUS = {
   none:     { key: "none",     label: "미제출",     cls: "s-none" },
   pending:  { key: "pending",  label: "검토 중",    cls: "s-pending" },
   released: { key: "released", label: "채점됨",     cls: "s-done" },
-  rejected: { key: "rejected", label: "반려됨",     cls: "s-rejected" },
+  rejected: { key: "rejected", label: "채점 불가",  cls: "s-rejected" },
 };
 
 // 자유 채점: 참고자료가 등록된 단원만 고를 수 있게 학습지 코드와 순서대로 매칭.
@@ -111,9 +111,11 @@ function latestSub(code) {
 
 // 재제출 시 이전 자료를 삭제하므로, 남은 문서 개수가 아니라 최신 제출물의
 // attempt 번호로 "지금까지 몇 번 제출했는지"를 판단한다.
+// 채점 불가(rejected)로 돌아온 건은 횟수에 넣지 않는다 — 다시 낼 때 같은 번호를 이어 쓴다.
 function attemptsUsed(code) {
   const s = latestSub(code);
-  return s ? (s.attempt || 0) : 0;
+  if (!s) return 0;
+  return (s.attempt || 0) - (s.status === "rejected" ? 1 : 0);
 }
 
 function statusOf(code) {
@@ -270,8 +272,8 @@ async function rejectedPanel(sub) {
         <div><h3>이전 제출 답안</h3>${content}</div>
         <div class="pending-note rejected">
           <div class="dot"></div>
-          <p>선생님이 반려했습니다.${sub.rejectReason ? `<br>사유: ${escapeHtml(sub.rejectReason)}` : ""}</p>
-          <p class="muted small">아래에서 답안을 다시 제출해주세요.</p>
+          <p>이 제출은 채점할 수 없었어요.${sub.rejectReason ? `<br>사유: ${escapeHtml(sub.rejectReason)}` : ""}</p>
+          <p class="muted small">제출 횟수는 차감되지 않아요. 아래에서 답안을 다시 제출해 주세요.</p>
         </div>
       </div>
     </section>`;
