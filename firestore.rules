@@ -37,7 +37,7 @@ service cloud.firestore {
           && request.resource.data.attempt is int
           && request.resource.data.attempt > 0
           && request.resource.data.attempt <= 5
-          && !request.resource.data.keys().hasAny(["grade", "feedback", "recognizedText", "recognizedEditedBy", "reviewFlag", "gradeError", "completed", "archived"]);
+          && !request.resource.data.keys().hasAny(["grade", "feedback", "recognizedText", "recognizedEditedBy", "reviewFlag", "gradeError", "completed", "archived", "regradeSource"]);
       }
 
       allow read:   if isAdmin() ||

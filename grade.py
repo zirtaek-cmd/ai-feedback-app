@@ -1,16 +1,25 @@
 """
-grade.py — 밀린 제출물을 Gemini로 채점해 '초안'을 reviews/ 에 저장한다.
+grade.py — 채점 대기 제출물을 Gemini로 채점하고, 문제없는 건은 바로 학생에게 공개한다.
 
-  사용: python grade.py
+  사용: python grade.py            (GitHub Actions 가 10분마다 실행. 로컬에서도 동일)
+        python grade.py --dry-run [제출물ID]
+                                    (쓰기 없이 채점만 해 보고 결과를 출력. ID 를 주면 그 건만,
+                                     안 주면 채점 대기 건 전부. 파이프라인 점검용)
   전제:
-    - serviceAccountKey.json (Firebase 서비스 계정 키, 로컬·gitignore)
-    - .env 에 GEMINI_API_KEY (Google AI Studio 무료 키)
+    - Firebase 서비스 계정: 환경변수 FIREBASE_SERVICE_ACCOUNT_JSON(키 JSON 문자열, Actions 용)
+      또는 serviceAccountKey.json 파일(로컬·gitignore)
+    - GEMINI_API_KEY (Actions 는 Secrets, 로컬은 .env)
+    - 선택: GEMINI_MODEL, THROTTLE_SEC, AUTO_RELEASE("0" 이면 전부 교사 검토 대기로 둠)
   흐름:
     submissions.status == "submitted" 조회
-      → 각 제출의 pages(이미지) 로드 (문제·답안 모두 이미지에 있음)
+      → 각 제출의 pages(이미지) 또는 answerText 로드
+        (교사가 재채점을 요청한 건은 regradeSource 에 따라 저장된 판독 문장 / 사진 재판독)
       → Gemini 채점(구조화 JSON)
-      → reviews/{id} 에 초안 저장 + submissions.status = "graded"
-    ※ 학생 공개는 여기서 하지 않는다(교사 검토·공개는 웹 교사 화면에서).
+      → reviews/{uid_학습지} 에 초안 저장
+      → reviewFlag 가 아니면 바로 released(학생 공개), reviewFlag 면 graded(교사 검토 대기)
+      → 채점 실패는 error 로 표시해 큐에서 뺀다(교사 화면에서 "다시 채점" 가능)
+  로그: 공개 저장소의 Actions 로그는 누구나 볼 수 있으므로 학생 이메일·점수·답안은 절대
+        출력하지 않는다. 제출물 문서 ID 와 건수만 남긴다.
 
 주의:
   - google-genai SDK 버전에 따라 Part 생성/호출부 형태가 조금 다를 수 있음.
@@ -19,7 +28,7 @@ grade.py — 밀린 제출물을 Gemini로 채점해 '초안'을 reviews/ 에 �
   - 무료 등급에서 쓸 수 있는 멀티모달 모델/한도는 수시로 바뀐다.
     Google AI Studio의 rate limits 페이지에서 확인해 GEMINI_MODEL 을 맞출 것.
 """
-import os, time, base64, json
+import os, sys, time, base64, json
 from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -30,8 +39,12 @@ from pydantic import BaseModel
 load_dotenv()
 
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-GEMINI_MODEL   = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")  # ← 무료 등급 가용 모델로 지정
-THROTTLE_SEC   = float(os.environ.get("THROTTLE_SEC", "5"))          # 무료 RPM 대응
+GEMINI_MODEL   = os.environ.get("GEMINI_MODEL") or "gemini-3.5-flash-lite"  # 무료 등급 가용 모델로 지정
+THROTTLE_SEC   = float(os.environ.get("THROTTLE_SEC") or "5")               # 무료 RPM 대응
+# 채점 결과를 교사 확인 없이 바로 학생에게 공개할지. reviewFlag(판독 애매, 문제 미등록 등)가
+# 선 건은 이 값과 무관하게 항상 교사 검토 대기(graded)로 남긴다.
+AUTO_RELEASE   = (os.environ.get("AUTO_RELEASE") or "1") not in ("0", "false", "no")
+DRY_RUN        = "--dry-run" in sys.argv
 
 # ---------- 채점 결과 스키마 ----------
 class Criterion(BaseModel):
@@ -163,7 +176,10 @@ SUMMARY_PROMPT = """당신은 중학교 3학년 과학 교사입니다. 첨부�
 - 다른 설명 없이 정리된 개념 내용만 바로 출력한다."""
 
 # ---------- Firebase ----------
-firebase_admin.initialize_app(credentials.Certificate("serviceAccountKey.json"))
+# Actions 에서는 키를 파일로 남기지 않고 환경변수(Secrets)로만 받는다.
+_sa_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+_cred = credentials.Certificate(json.loads(_sa_json)) if _sa_json else credentials.Certificate("serviceAccountKey.json")
+firebase_admin.initialize_app(_cred)
 db = firestore.client()
 client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -224,63 +240,124 @@ def append_resubmit_note(g):
     return g
 
 
-def main():
-    subs = list(db.collection("submissions").where("status", "==", "submitted").stream())
-    print(f"채점 대상: {len(subs)}건")
-    graded = flagged = errors = 0
+def flat_grade(g):
+    """reviews 초안(항목별 {score, note})을 submissions.grade 의 평면 형태로 바꾼다
+    (teacher.js 의 toFlatGrade 와 동일)."""
+    return {
+        "total": g.get("total"),
+        "concept": g.get("concept", {}).get("score", 0),
+        "logic": g.get("logic", {}).get("score", 0),
+        "evidence": g.get("evidence", {}).get("score", 0),
+        "expression": g.get("expression", {}).get("score", 0),
+    }
 
-    for s in subs:
+
+def grade_submission(sub_id, data):
+    """제출물 한 건을 채점해 초안(dict)을 돌려준다. 쓰기는 하지 않는다."""
+    ws = db.collection("worksheets").document(data["worksheetId"]).get()
+    ws_data = ws.to_dict() or {}
+    reference_material = ws_data.get("referenceMaterial", "")
+    problem = ws_data.get("problem", "")
+    regrade_source = data.get("regradeSource")
+
+    if data.get("answerType") == "text":
+        answer = data.get("answerText", "")
+        if not answer:
+            raise ValueError("답안 텍스트 없음")
+        return append_resubmit_note(grade_text(problem, answer, reference_material))
+
+    # 교사가 "저장된 문장으로 재채점"을 요청했고 판독 문장이 있으면 사진을 다시 보내지 않는다
+    # (teacher.js 의 예전 performRegrade 와 동일, 토큰 절약).
+    if regrade_source == "text" and data.get("recognizedText"):
+        return append_resubmit_note(grade_text(problem, data["recognizedText"], reference_material))
+
+    pages = (db.collection("submissions").document(sub_id)
+               .collection("pages").order_by("order").stream())
+    imgs = []
+    for p in pages:
+        b64 = p.to_dict().get("imageBase64", "")
+        if "," in b64:                      # dataURL 헤더 제거
+            b64 = b64.split(",", 1)[1]
+        if b64:
+            imgs.append(base64.b64decode(b64))
+    if not imgs:
+        raise ValueError("이미지 없음")
+    return append_resubmit_note(grade_images(imgs, reference_material))
+
+
+def main():
+    only_id = next((a for a in sys.argv[1:] if not a.startswith("--")), None)
+    if only_id:
+        snap = db.collection("submissions").document(only_id).get()
+        subs = [snap] if snap.exists else []
+    else:
+        subs = list(db.collection("submissions").where("status", "==", "submitted").stream())
+    mode = " (dry-run: 쓰기 없음)" if DRY_RUN else ""
+    print(f"채점 대상: {len(subs)}건{mode} · 모델 {GEMINI_MODEL} · 자동 공개 {'on' if AUTO_RELEASE else 'off'}")
+    graded = released = flagged = errors = 0
+
+    for i, s in enumerate(subs):
         data = s.to_dict()
         try:
-            ws = db.collection("worksheets").document(data["worksheetId"]).get()
-            ws_data = ws.to_dict() or {}
-            reference_material = ws_data.get("referenceMaterial", "")
+            g = grade_submission(s.id, data)
+            is_flag = bool(g.get("reviewFlag"))
+            do_release = AUTO_RELEASE and not is_flag
 
-            if data.get("answerType") == "text":
-                problem = ws_data.get("problem", "")
-                answer = data.get("answerText", "")
-                if not answer:
-                    print(f"  [건너뜀] 답안 없음: {s.id}")
-                    continue
-                g = append_resubmit_note(grade_text(problem, answer, reference_material))
+            if DRY_RUN:
+                print(f"  [dry] {s.id} → {'공개 예정' if do_release else '검토 대기'}"
+                      f"{'  ⚠️ ' + str(g.get('reviewReason', ''))[:60] if is_flag else ''}")
             else:
-                pages = (db.collection("submissions").document(s.id)
-                           .collection("pages").order_by("order").stream())
-                imgs = []
-                for p in pages:
-                    b64 = p.to_dict().get("imageBase64", "")
-                    if "," in b64:                      # dataURL 헤더 제거
-                        b64 = b64.split(",", 1)[1]
-                    if b64:
-                        imgs.append(base64.b64decode(b64))
-                if not imgs:
-                    print(f"  [건너뜀] 이미지 없음: {s.id}")
-                    continue
-                g = append_resubmit_note(grade_images(imgs, reference_material))
-            # 채점 초안 키는 학생+학습지 (teacher.js 의 reviewKey 와 반드시 동일해야 한다).
-            # 제출물 ID로 잡으면 재제출마다 짝 잃은 기록이 쌓인다.
-            review_key = f"{data.get('studentUid')}_{data.get('worksheetId')}"
-            db.collection("reviews").document(review_key).set(g)
-            db.collection("submissions").document(s.id).update({
-                "status": "graded",
-                "gradedAt": firestore.SERVER_TIMESTAMP,
-                # 교사 화면 목록의 "확인 필요" 배지는 이 필드를 읽는다(초안 전체를 읽지 않기 위해).
-                "reviewFlag": bool(g.get("reviewFlag")),
-                "gradeError": None,
-            })
+                # 채점 초안 키는 학생+학습지 (teacher.js 의 reviewKey 와 반드시 동일해야 한다).
+                review_key = f"{data.get('studentUid')}_{data.get('worksheetId')}"
+                db.collection("reviews").document(review_key).set(g)
+
+                update = {
+                    "gradedAt": firestore.SERVER_TIMESTAMP,
+                    "gradeError": None,
+                    # 재채점 요청 표식과 "학생이 문장 수정함" 표식은 채점이 끝났으니 지운다.
+                    "regradeSource": firestore.DELETE_FIELD,
+                    "recognizedEditedBy": None,
+                }
+                if do_release:
+                    # teacher.js 의 release() 가 쓰는 필드와 동일하게 확정본을 복사한다.
+                    update.update({
+                        "status": "released",
+                        "releasedAt": firestore.SERVER_TIMESTAMP,
+                        "grade": flat_grade(g),
+                        "feedback": g.get("feedback", ""),
+                        "recognizedText": g.get("recognizedText", ""),
+                        "reviewFlag": False,
+                    })
+                else:
+                    # 교사 화면 목록의 "확인 필요" 배지는 이 필드를 읽는다(초안 전체를 읽지 않기 위해).
+                    update.update({"status": "graded", "reviewFlag": is_flag})
+                db.collection("submissions").document(s.id).update(update)
+
             graded += 1
-            if g.get("reviewFlag"):
+            if do_release:
+                released += 1
+            if is_flag:
                 flagged += 1
-            tag = "  ⚠️ 확인필요" if g.get("reviewFlag") else ""
-            print(f"  [완료] {data.get('studentEmail')} {data.get('worksheetId')} "
-                  f"→ {g.get('total')}점{tag}")
         except Exception as e:
             errors += 1
-            print(f"  [오류] {s.id}: {e}")
-        time.sleep(THROTTLE_SEC)
+            # 오류 메시지에 응답 본문이 섞일 수 있어 종류와 앞부분만 남긴다.
+            msg = f"{type(e).__name__}: {str(e)[:120]}"
+            print(f"  [오류] {s.id}: {msg}")
+            if not DRY_RUN:
+                # submitted 로 두면 다음 실행마다 같은 건을 다시 채점하며 한도를 태운다.
+                # error 로 표시해 큐에서 빼고, 교사가 화면에서 "다시 채점"으로 되돌린다.
+                try:
+                    db.collection("submissions").document(s.id).update({
+                        "status": "error", "gradeError": str(e)[:300],
+                    })
+                except Exception:
+                    pass
+        if i < len(subs) - 1:
+            time.sleep(THROTTLE_SEC)
 
-    print(f"\n채점 완료: {graded}건 (확인 필요 {flagged}건, 오류 {errors}건)")
-    print("→ 웹 교사 화면에서 검토·공개하세요.")
+    print(f"\n채점 완료: {graded}건 (공개 {released}건, 확인 필요 {flagged}건, 오류 {errors}건)")
+    if graded - released:
+        print("→ 검토 대기 건은 웹 교사 화면에서 확인 후 공개하세요.")
 
 
 if __name__ == "__main__":
