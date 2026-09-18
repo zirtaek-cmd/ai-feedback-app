@@ -43,8 +43,8 @@ let worksheetTitleMap = {}; // worksheetId  -> title (목록의 학습지 그룹
 const expandedGroups = new Set();
 // 반 구역은 기본으로 펼쳐 두고, 교사가 접은 반("1", "2", "미확인")만 여기에 기억한다.
 const collapsedClasses = new Set();
-// 반 안의 단원 구역("반|단원번호")도 기본으로 펼쳐 두고, 교사가 접은 것만 기억한다.
-const collapsedChapters = new Set();
+// 반 안의 단원 구역("반|단원번호")도 기본은 접힘이고, 교사가 펼친 것만 기억한다.
+const expandedChapters = new Set();
 
 // 학습지 코드 앞 숫자가 단원이다("4-1-1" → "4", "5-2-3" → "5"). 숫자로 안 시작하면 "기타".
 function unitOf(wsId) {
@@ -771,7 +771,7 @@ function renderList() {
   // 반 안에서 학습지 그룹을 단원별("4단원", "5단원")로 한 번 더 묶는다.
   const renderChapter = (cls, unit, groups) => {
     const key = `${cls}|${unit}`;
-    const open = collapsedChapters.has(key) ? "" : " open";
+    const open = expandedChapters.has(key) ? " open" : "";
     const label = unit === "기타" ? "기타" : `${unit}단원`;
     return `<details class="chapter" data-key="${escapeHtml(key)}"${open}>
         <summary class="chapter-title"><span class="chapter-title-row">${escapeHtml(label)}</span></summary>
@@ -840,8 +840,8 @@ function renderList() {
   );
   list.querySelectorAll(".chapter").forEach((d) =>
     d.addEventListener("toggle", () => {
-      if (d.open) collapsedChapters.delete(d.dataset.key);
-      else collapsedChapters.add(d.dataset.key);
+      if (d.open) expandedChapters.add(d.dataset.key);
+      else expandedChapters.delete(d.dataset.key);
     })
   );
 }
@@ -854,7 +854,7 @@ async function selectItem(id) {
     const cls = String(rosterMap[it.studentEmail]?.class ?? "미확인");
     expandedGroups.add(`${cls}|${it.worksheetId}`);
     collapsedClasses.delete(cls);
-    collapsedChapters.delete(`${cls}|${unitOf(it.worksheetId)}`);
+    expandedChapters.add(`${cls}|${unitOf(it.worksheetId)}`);
   }
   renderList();
   const main = document.getElementById("t-main");
