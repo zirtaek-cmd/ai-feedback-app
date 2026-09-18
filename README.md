@@ -46,9 +46,9 @@ Wrks 에이전트 없이 직접 명령어로 배포할 때만 필요합니다.
   "확인 필요" 건만 검토 대기로 남김 → 다음에 교사가 검토·공개.
 
 ## 자동 채점 (GitHub Actions) 설정
-`.github/workflows/grade.yml` 이 평일 16:30~02:00, 주말 09:00~02:00(KST)에 5분마다 `grade.py` 를 돌린다. 시간대는 워크플로의
-cron(UTC)과 `ACTIVE_WINDOW`·`ACTIVE_WINDOW_WEEKEND` 변수(KST)가 같이 정하며, 그 밖의 시간에 강제로 돌리려면 "Run workflow" 에서
-force 를 true 로 준다. 한 번만 설정하면 된다.
+`.github/workflows/grade.yml` 이 5분마다 `grade.py` 를 돌리고, `grade.py` 가 평일 16:30~02:00, 주말 09:00~02:00(KST)에만
+실제로 채점한다(그 밖에는 바로 종료). 시간대는 `ACTIVE_WINDOW`·`ACTIVE_WINDOW_WEEKEND` 변수로 바꾸고, 시간대 밖에 강제로
+돌리려면 "Run workflow" 에서 force 를 true 로 준다. 한 번만 설정하면 된다.
 
 1. **Firestore 전용 서비스 계정 만들기** — Google Cloud 콘솔 → IAM 및 관리자 → 서비스 계정 → 만들기.
    역할은 `Cloud Datastore 사용자` 하나만 준다(프로젝트 전체 권한인 기본 키를 쓰지 말 것).

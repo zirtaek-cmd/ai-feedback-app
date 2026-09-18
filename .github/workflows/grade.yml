@@ -1,8 +1,9 @@
 # 평일 16:30~02:00, 주말 09:00~02:00(KST)에 5분마다 채점 대기 제출물을 Gemini 로 채점하고,
 # 문제없는 건은 바로 학생에게 공개한다. 그 밖의 시간은 교사가 웹 교사 화면에서 직접 채점한다.
-# 시간대는 두 곳이 맞물려 있다: 아래 cron(UTC) 이 대략 그 시간대에만 실행을 만들고,
-# grade.py 의 ACTIVE_WINDOW / ACTIVE_WINDOW_WEEKEND 가 KST 기준으로 정확히 한 번 더 확인한다.
-# 시간대를 바꾸려면 cron 과 변수를 같이 바꿀 것.
+# 예약은 일부러 "5분마다 항상"으로 단순하게 둔다. 시간대 판단은 grade.py 의
+# ACTIVE_WINDOW / ACTIVE_WINDOW_WEEKEND(KST) 가 하고, 시간대 밖이면 20초 만에 빈 실행으로 끝난다
+# (공개 저장소라 비용 없음). 요일·시간 범위가 섞인 cron 은 GitHub 이 등록을 늦추거나 빠뜨리는
+# 일이 있어 쓰지 않는다. 시간대를 바꾸려면 변수(또는 grade.py 기본값)만 바꾸면 된다.
 # (자세한 설정은 README "자동 채점" 절 참고)
 #
 # 필요한 Secrets (저장소 Settings → Secrets and variables → Actions):
@@ -21,9 +22,7 @@ name: grade
 
 on:
   schedule:
-    - cron: "30,35,40,45,50,55 7 * * 1-5"   # 월~금 UTC 07:30~07:55 = KST 16:30~16:55
-    - cron: "*/5 8-16 * * 1-5"              # 월~금 UTC 08:00~16:55 = KST 17:00~01:55(다음 날)
-    - cron: "*/5 0-16 * * 6,0"              # 토·일 UTC 00:00~16:55 = KST 09:00~01:55(다음 날)
+    - cron: "*/5 * * * *"   # 5분마다(GitHub 최소 간격). 혼잡 시 몇 분 지연될 수 있음
   workflow_dispatch:         # Actions 탭에서 "Run workflow" 로 즉시 실행
     inputs:
       force:
