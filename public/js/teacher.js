@@ -715,15 +715,12 @@ function renderList() {
       const key = `${cls}|${wsId}`;
       const items = byWs[wsId];
       const open = expandedGroups.has(key) ? " open" : "";
-      const title = worksheetTitleMap[wsId]
-        ? `${escapeHtml(wsId)} · ${escapeHtml(worksheetTitleMap[wsId])}`
-        : escapeHtml(wsId);
-      const pending = items.filter((it) => it.status === "graded" || it.reviewFlag).length;
-      const count = pending
-        ? `<span class="ws-group-count">${items.length}건 · 검토 ${pending}</span>`
-        : `<span class="ws-group-count">${items.length}건</span>`;
+      // 이 앱의 학습지는 title 이 code 와 같은 값으로 등록돼 있어(예: "4-2-2") 그냥 붙이면
+      // "4-2-2 · 4-2-2" 처럼 중복 표시된다. title 이 code 와 다를 때만 같이 보여준다.
+      const t = worksheetTitleMap[wsId];
+      const title = (t && t !== wsId) ? `${escapeHtml(wsId)} · ${escapeHtml(t)}` : escapeHtml(wsId);
       return `<details class="ws-group" data-key="${escapeHtml(key)}"${open}>
-          <summary class="ws-group-title"><span class="ws-group-title-row"><span>${title}</span>${count}</span></summary>
+          <summary class="ws-group-title"><span class="ws-group-title-row">${title}</span></summary>
           ${items.map(renderItem).join("")}
         </details>`;
     }).join("");

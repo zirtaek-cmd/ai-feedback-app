@@ -121,7 +121,6 @@ body {
 .ws-group[open] > .ws-group-title .ws-group-title-row::before { transform: rotate(90deg); }
 .ws-group-title-row > span:first-of-type { flex: 1; }
 .ws-group-title:hover { background: var(--grey-soft); }
-.ws-group-count { font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
 .ws-group > .ws-item { padding-left: 26px; }
 .ws-item {
   width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
