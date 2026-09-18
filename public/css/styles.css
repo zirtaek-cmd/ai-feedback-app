@@ -104,18 +104,22 @@ body {
   padding: 4px 8px; margin-bottom: 4px;
 }
 .ws-group { margin-bottom: 6px; }
+/* <summary> 자체는 flex 를 주지 않는다(사파리가 접기 버튼의 기본 여백을 완전히
+   지우지 않아서 안의 글자가 밀려 보이는 문제가 생김). 대신 안에 감싼
+   .ws-group-title-row 에만 flex 를 줘서 사파리·엣지에서 똑같이 배치되게 한다. */
 .ws-group-title {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 7px 10px; border-radius: 8px; cursor: pointer; user-select: none;
-  font-size: 13px; font-weight: 700; color: var(--ink); list-style: none;
+  display: block; padding: 7px 10px; border-radius: 8px; cursor: pointer;
+  user-select: none; font-size: 13px; font-weight: 700; color: var(--ink);
+  list-style: none;
 }
 .ws-group-title::-webkit-details-marker { display: none; }
-.ws-group-title::before {
-  content: "▸"; display: inline-block; width: 12px; margin-right: 4px;
+.ws-group-title-row { display: flex; align-items: center; gap: 8px; }
+.ws-group-title-row::before {
+  content: "▸"; display: inline-block; width: 12px;
   color: var(--muted); transition: transform .15s;
 }
-.ws-group[open] > .ws-group-title::before { transform: rotate(90deg); }
-.ws-group-title > span:first-of-type { flex: 1; }
+.ws-group[open] > .ws-group-title .ws-group-title-row::before { transform: rotate(90deg); }
+.ws-group-title-row > span:first-of-type { flex: 1; }
 .ws-group-title:hover { background: var(--grey-soft); }
 .ws-group-count { font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
 .ws-group > .ws-item { padding-left: 26px; }

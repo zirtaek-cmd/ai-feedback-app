@@ -723,7 +723,7 @@ function renderList() {
         ? `<span class="ws-group-count">${items.length}건 · 검토 ${pending}</span>`
         : `<span class="ws-group-count">${items.length}건</span>`;
       return `<details class="ws-group" data-key="${escapeHtml(key)}"${open}>
-          <summary class="ws-group-title"><span>${title}</span>${count}</summary>
+          <summary class="ws-group-title"><span class="ws-group-title-row"><span>${title}</span>${count}</span></summary>
           ${items.map(renderItem).join("")}
         </details>`;
     }).join("");
