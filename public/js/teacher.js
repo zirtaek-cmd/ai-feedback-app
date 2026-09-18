@@ -515,6 +515,7 @@ async function performRegrade(it) {
   await updateDoc(doc(db, "submissions", it.id), {
     grade: flat, feedback: g.feedback, recognizedText: g.recognizedText,
     gradedAt: serverTimestamp(), reviewFlag: !!g.reviewFlag, gradeError: null,
+    recognizedEditedBy: null,
   });
   it.grade = flat;
   it.feedback = g.feedback;
@@ -652,6 +653,7 @@ function renderList() {
   list.innerHTML = classes.map((cls) => {
     const items = byClass[cls].map((it) => {
       const flag = it.reviewFlag ? `<span class="badge s-flag">확인 필요</span>` : "";
+      const edited = it.recognizedEditedBy === "student" ? `<span class="badge s-flag">문장 수정됨</span>` : "";
       const active = state.selected === it.id ? "active" : "";
       // 공개 전 점수는 목록에도 띄우지 않는다(초안은 항목을 열었을 때만 조회).
       const score = it.status === "released" ? it.grade?.total : null;
@@ -661,7 +663,7 @@ function renderList() {
           <span class="ws-code">${escapeHtml(it.worksheetId)} · ${who}</span>
           <span>${score ?? "-"}점
             <span class="badge ${STATUS_CLS[it.status] || "s-none"}">${STATUS_LABEL[it.status] || escapeHtml(it.status)}</span>
-            ${flag}
+            ${flag}${edited}
           </span>
         </button>`;
     }).join("");
@@ -723,10 +725,16 @@ async function selectItem(id) {
     ].map(([label, val, max]) =>
       `<div class="crit"><span>${label}</span><b>${val ?? "-"} / ${max}</b></div>`
     ).join("");
+    // 학생이 판독 문장을 고친 경우, 점수는 그대로이므로 사진과 대조한 뒤
+    // 재채점할지 교사가 판단하도록 눈에 띄게 알린다.
+    const studentEditedNote = it.recognizedEditedBy === "student"
+      ? `<p class="badge s-flag" style="margin:8px 0 0">학생이 이 문장을 수정했습니다 — 사진과 대조한 뒤 재채점하세요.</p>`
+      : "";
     const recognizedSection = it.answerType !== "text" ? `
       <div class="recognized">
         <div class="fb-head"><h4>사진으로 인식한 문장</h4><button class="btn ghost" id="editRecognizedBtn">수정</button></div>
         <div id="recognizedView"><p class="feedback">${escapeHtml(recognizedText)}</p></div>
+        ${studentEditedNote}
       </div>` : "";
     main.innerHTML = `${header}
       <section class="card">
@@ -812,8 +820,11 @@ async function selectItem(id) {
           saveBtn.disabled = true; saveBtn.textContent = "저장 중…";
           try {
             const newText = document.getElementById("recognizedEdit").value;
-            await updateDoc(doc(db, "submissions", it.id), { recognizedText: newText });
+            await updateDoc(doc(db, "submissions", it.id), {
+              recognizedText: newText, recognizedEditedBy: "teacher",
+            });
             it.recognizedText = newText;
+            it.recognizedEditedBy = "teacher";
             selectItem(it.id);
           } catch (e) {
             saveBtn.disabled = false; saveBtn.textContent = "저장";

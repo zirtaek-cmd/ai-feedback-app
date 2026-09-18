@@ -43,9 +43,15 @@ service cloud.firestore {
       allow read:   if isAdmin() ||
                        (isSignedIn() && resource.data.studentUid == request.auth.uid);
       allow create: if isInRoster() && validNewSubmission();
-      // 수정은 관리자 전용. 학생이 recognizedText(채점 근거가 되는 문장)를 고칠 수 있으면
-      // 사진은 그대로 둔 채 채점 대상만 바꿔치기할 수 있어 허용하지 않는다.
-      allow update: if isAdmin();
+      // 수정: 관리자는 전체 필드. 학생은 사진 판독이 틀렸을 때를 대비해 recognizedText 만
+      // 고칠 수 있다. 고쳐도 점수는 바뀌지 않고(자동 재채점 없음), 교사가 사진과 대조한 뒤
+      // 재채점을 눌러야 반영된다. 누가 고쳤는지 교사 화면에 표시하려고 표식도 함께 남긴다.
+      allow update: if isAdmin() ||
+                       (isSignedIn() && resource.data.studentUid == request.auth.uid
+                        && request.resource.data.diff(resource.data).affectedKeys()
+                             .hasOnly(["recognizedText", "recognizedEditedBy"])
+                        && request.resource.data.recognizedEditedBy == "student"
+                        && request.resource.data.recognizedText is string);
       allow delete: if isAdmin() ||
                        (isSignedIn() && resource.data.studentUid == request.auth.uid
                         && (resource.data.status == "submitted" || resource.data.status == "released"

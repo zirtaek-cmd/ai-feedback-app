@@ -1,6 +1,6 @@
 import { db } from "./firebase-init.js";
 import {
-  collection, doc, query, where, orderBy, getDocs, getDoc, addDoc, deleteDoc,
+  collection, doc, query, where, orderBy, getDocs, getDoc, addDoc, updateDoc, deleteDoc,
   runTransaction, onSnapshot, serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 import { compressImage } from "./compress.js";
@@ -187,6 +187,7 @@ async function selectWorksheet(code) {
   main.innerHTML = body;
   wireLightboxImages(main);
   wireUpload(code, attempts);
+  if (sub) wireRecognizedEdit(sub, code);
   const cancelBtn = document.getElementById("cancelBtn");
   if (cancelBtn) cancelBtn.addEventListener("click", () => cancelSubmission(sub, code));
 }
@@ -298,14 +299,45 @@ async function submittedContentHtml(sub) {
   }
   const imgsHtml = await pagesHtml(sub.id);
   if (!sub.recognizedText) return imgsHtml;
-  // 읽기 전용 — 이 문장이 채점 근거라, 학생이 고칠 수 있으면 사진은 그대로 둔 채
-  // 채점 대상만 바꿔치기할 수 있다(수정은 교사 화면에서만 가능).
   return imgsHtml + `
     <div class="recognized">
-      <h4>사진으로 인식한 문장</h4>
-      <p class="feedback">${escapeHtml(sub.recognizedText)}</p>
-      <p class="muted small">잘못 인식된 부분이 있으면 선생님께 말씀해 주세요.</p>
+      <div class="fb-head"><h4>사진으로 인식한 문장</h4><button class="btn ghost" id="editRecognizedBtn">수정</button></div>
+      <div id="recognizedView"><p class="feedback">${escapeHtml(sub.recognizedText)}</p></div>
+      <p class="muted small">사진이 잘못 읽힌 부분만 고쳐주세요. 고친다고 점수가 바로 바뀌지는 않고, 선생님이 사진과 대조한 뒤 다시 채점합니다.</p>
     </div>`;
+}
+
+// 사진 판독(OCR)이 틀렸을 때 학생이 문장을 바로잡는다. 점수는 바뀌지 않고,
+// 교사 화면에 "학생이 수정함"으로 표시돼 교사가 확인 후 재채점한다.
+function wireRecognizedEdit(sub, code) {
+  const editBtn = document.getElementById("editRecognizedBtn");
+  if (!editBtn) return;
+  editBtn.addEventListener("click", () => {
+    document.getElementById("recognizedView").innerHTML = `
+      <textarea id="recognizedEdit" rows="4">${escapeHtml(sub.recognizedText || "")}</textarea>
+      <div class="fb-actions">
+        <button class="btn primary" id="saveRecognizedBtn">저장</button>
+        <button class="btn ghost" id="cancelRecognizedBtn">취소</button>
+      </div>`;
+    document.getElementById("cancelRecognizedBtn").addEventListener("click", () => selectWorksheet(code));
+    document.getElementById("saveRecognizedBtn").addEventListener("click", async () => {
+      const saveBtn = document.getElementById("saveRecognizedBtn");
+      saveBtn.disabled = true;
+      saveBtn.textContent = "저장 중…";
+      try {
+        const newText = document.getElementById("recognizedEdit").value;
+        await updateDoc(doc(db, "submissions", sub.id), {
+          recognizedText: newText, recognizedEditedBy: "student",
+        });
+        sub.recognizedText = newText;
+        selectWorksheet(code);
+      } catch (e) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = "저장";
+        alert("저장에 실패했습니다: " + e.message);
+      }
+    });
+  });
 }
 
 async function pagesHtml(subId) {
