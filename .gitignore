@@ -21,3 +21,6 @@ __pycache__/
 # macOS / Firebase CLI 로컬 캐시
 .DS_Store
 .firebase/
+
+# 삭제 전 백업본(학생 채점 데이터 포함) — 커밋 금지
+backup/

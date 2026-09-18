@@ -261,6 +261,9 @@ def main():
             db.collection("submissions").document(s.id).update({
                 "status": "graded",
                 "gradedAt": firestore.SERVER_TIMESTAMP,
+                # 교사 화면 목록의 "확인 필요" 배지는 이 필드를 읽는다(초안 전체를 읽지 않기 위해).
+                "reviewFlag": bool(g.get("reviewFlag")),
+                "gradeError": None,
             })
             graded += 1
             if g.get("reviewFlag"):

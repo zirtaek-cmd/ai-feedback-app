@@ -98,11 +98,11 @@ function startListening() {
     });
     items = Object.values(latest);
 
-    // 각 항목의 채점 초안(reviews) 로드 (있으면) — 항목이 많아도 느려지지 않도록 병렬로 조회.
-    await Promise.all(items.map(async (it) => {
-      const r = await getDoc(doc(db, "reviews", it.id));
-      it.review = r.exists() ? r.data() : null;
-    }));
+    // 채점 초안(reviews)은 여기서 읽지 않는다. 예전에는 목록을 그릴 때마다 전 항목의
+    // reviews 를 한 건씩 조회했는데(N+1), 제출물이 늘면 스냅샷이 한 번 올 때마다
+    // 그 수만큼 읽기가 발생해 무료 등급 하루 한도를 수업 한 타임에 소진한다.
+    // 목록에 필요한 "확인 필요" 배지는 submissions.reviewFlag 로 대신하고,
+    // 초안 원본은 항목을 선택했을 때 한 건만 읽는다(selectItem).
     // 반별 구역으로 묶고, 구역 안에서는 학습지 번호순 → 학생 번호순으로 정렬한다.
     items.sort((a, b) => {
       const ca = rosterMap[a.studentEmail]?.class ?? 999;
@@ -120,41 +120,10 @@ function startListening() {
 
     if (isGrading) return;
 
-    // 공개된 항목의 recognizedText가 마지막 채점 시점(reviews.recognizedText)과
-    // 달라졌으면 — 학생이든 교사든 "사진으로 인식한 문장"을 고친 것이므로 —
-    // 자동으로 재채점한다(버튼 없이도 동작, 이미지 아닌 텍스트라 토큰도 적게 듦).
-    const needsRegrade = items.filter((it) =>
-      it.status === "released" && it.answerType !== "text" && !it.completed &&
-      it.recognizedText && it.review && it.recognizedText !== it.review.recognizedText
-    );
-    if (needsRegrade.length) {
-      autoRegradeAll(needsRegrade);
-    } else if (items.some((it) => it.status === "submitted")) {
-      // 새로 제출된(=아직 채점 전인) 건이 있으면 버튼을 누른 것처럼 자동 채점한다.
-      // 관리자 화면이 열려 있는 동안만 동작한다.
-      runGrading();
-    }
+    // 새로 제출된(=아직 채점 전인) 건이 있으면 버튼을 누른 것처럼 자동 채점한다.
+    // 관리자 화면이 열려 있는 동안만 동작한다.
+    if (items.some((it) => it.status === "submitted")) runGrading();
   });
-}
-
-async function autoRegradeAll(items) {
-  isGrading = true;
-  const statusEl = document.getElementById("gradeStatus");
-  for (const it of items) {
-    if (statusEl) statusEl.textContent = `"${it.studentEmail}" 학생이 수정한 문장으로 재채점 중…`;
-    try {
-      await performRegrade(it);
-      if (state.selected === it.id) selectItem(it.id);
-      else renderList();
-    } catch (e) {
-      console.error(`[자동 재채점 오류] ${it.id}:`, e);
-    }
-    if (items.indexOf(it) < items.length - 1) {
-      await new Promise((r) => setTimeout(r, THROTTLE_MS));
-    }
-  }
-  if (statusEl) statusEl.textContent = "";
-  isGrading = false;
 }
 
 async function renderWorksheetAdmin(root) {
@@ -172,10 +141,17 @@ async function renderWorksheetAdmin(root) {
         <button class="btn ghost" id="deleteFreeformBtn">AI 서술형 채점기 자료 전체 삭제</button>
       </section>
 
+      <section class="card">
+        <h3>남은 채점 기록 정리</h3>
+        <p class="muted small">학생이 재제출하거나 제출을 취소하면 그 제출물의 채점 기록만 남습니다.
+          지워진 제출물의 채점 기록을 찾아서 정리합니다(현재 제출물에는 영향 없음).</p>
+        <button class="btn ghost" id="cleanupReviewsBtn">남은 채점 기록 정리</button>
+      </section>
+
       <div class="ws-grid">
       ${worksheets.map((w) => `
         <section class="card">
-          <h3>${w.unit}단원 · ${w.title || w.code}</h3>
+          <h3>${escapeHtml(String(w.unit))}단원 · ${escapeHtml(w.title || w.code)}</h3>
 
           <label class="fb-label">문제</label>
           <textarea data-code="${w.code}" data-field="problem" rows="6" placeholder="문제 내용을 입력하세요">${escapeHtml(w.problem || "")}</textarea>
@@ -240,6 +216,42 @@ async function renderWorksheetAdmin(root) {
   });
 
   document.getElementById("deleteFreeformBtn").addEventListener("click", deleteAllFreeform);
+  document.getElementById("cleanupReviewsBtn").addEventListener("click", cleanupOrphanReviews);
+}
+
+// 제출물이 지워졌는데 남아있는 채점 기록(reviews)을 찾아 정리한다.
+// 학생은 reviews 를 지울 권한이 없어(규칙상 관리자 전용) 재제출·제출취소 때마다
+// 기록이 쌓이므로, 교사가 가끔 눌러서 정리하는 방식으로 둔다.
+async function cleanupOrphanReviews() {
+  const btn = document.getElementById("cleanupReviewsBtn");
+  btn.disabled = true;
+  btn.textContent = "확인 중…";
+  try {
+    const [revSnap, subSnap] = await Promise.all([
+      getDocs(collection(db, "reviews")),
+      getDocs(collection(db, "submissions")),
+    ]);
+    const subIds = new Set(subSnap.docs.map((d) => d.id));
+    const orphans = revSnap.docs.filter((d) => !subIds.has(d.id));
+    if (!orphans.length) {
+      btn.textContent = "정리할 기록 없음";
+      setTimeout(() => { btn.textContent = "남은 채점 기록 정리"; btn.disabled = false; }, 2000);
+      return;
+    }
+    if (!confirm(`지워진 제출물의 채점 기록 ${orphans.length}건을 정리할까요?\n현재 제출물의 채점 결과는 그대로 유지됩니다.`)) {
+      btn.textContent = "남은 채점 기록 정리";
+      btn.disabled = false;
+      return;
+    }
+    btn.textContent = "정리 중…";
+    for (const d of orphans) await deleteDoc(doc(db, "reviews", d.id));
+    btn.textContent = `정리 완료 (${orphans.length}건)`;
+    setTimeout(() => { btn.textContent = "남은 채점 기록 정리"; btn.disabled = false; }, 2500);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "남은 채점 기록 정리";
+    alert("정리에 실패했습니다: " + e.message);
+  }
 }
 
 async function deleteAllFreeform() {
@@ -358,7 +370,7 @@ function renderRosterSidebar(pageState) {
       const cls = sub ? (STATUS_CLS[sub.status] || "s-none") : "s-none";
       const active = pageState.selected === w.code ? "active" : "";
       return `<button class="ws-item ${active}" data-code="${w.code}">
-          <span class="ws-code">${w.title || w.code}</span>
+          <span class="ws-code">${escapeHtml(w.title || w.code)}</span>
           <span class="badge ${cls}">${label}</span>
         </button>`;
     }).join("");
@@ -381,7 +393,7 @@ async function selectRosterWorksheet(pageState, code) {
   const sub = pageState.subsByWs[code];
   const main = document.getElementById("roster-main");
 
-  let body = `<header class="main-head"><h2>${ws.title || ws.code}</h2></header>`;
+  let body = `<header class="main-head"><h2>${escapeHtml(ws.title || ws.code)}</h2></header>`;
   if (ws.problem) {
     body += `<section class="card"><h3>문제</h3><p class="feedback">${escapeHtml(ws.problem)}</p></section>`;
   }
@@ -443,9 +455,21 @@ function fileToBase64(file) {
   });
 }
 
+// 제출 이미지는 한 번 올라오면 바뀌지 않으므로(규칙상 학생은 생성·삭제만 가능)
+// 제출물 단위로 캐시한다 — 같은 항목을 다시 열 때 읽기·대역폭을 다시 쓰지 않는다.
+const pagesCache = new Map(); // submissionId -> dataURL[]
+const PAGES_CACHE_MAX = 30;   // 이미지가 장당 수백 KB라 탭 메모리를 위해 개수를 제한한다
+
 async function loadPageImages(subId) {
+  if (pagesCache.has(subId)) return pagesCache.get(subId);
   const snap = await getDocs(query(collection(db, "submissions", subId, "pages"), orderBy("order")));
-  return snap.docs.map((d) => d.data().imageBase64).filter(Boolean);
+  // 학생이 써넣는 값이므로 실제 이미지 데이터 URL만 통과시킨다(HTML 주입 차단).
+  const imgs = snap.docs
+    .map((d) => d.data().imageBase64)
+    .filter((s) => typeof s === "string" && s.startsWith("data:image/"));
+  if (pagesCache.size >= PAGES_CACHE_MAX) pagesCache.delete(pagesCache.keys().next().value);
+  pagesCache.set(subId, imgs);
+  return imgs;
 }
 
 // 항목별 점수 입력칸 하나. score는 순수 숫자(공개된 채점 결과)이거나 {score, note}
@@ -489,12 +513,30 @@ async function performRegrade(it) {
   await setDoc(doc(db, "reviews", it.id), g);
   const flat = toFlatGrade(g);
   await updateDoc(doc(db, "submissions", it.id), {
-    grade: flat, feedback: g.feedback, recognizedText: g.recognizedText, gradedAt: serverTimestamp(),
+    grade: flat, feedback: g.feedback, recognizedText: g.recognizedText,
+    gradedAt: serverTimestamp(), reviewFlag: !!g.reviewFlag, gradeError: null,
   });
   it.grade = flat;
   it.feedback = g.feedback;
   it.recognizedText = g.recognizedText;
+  it.reviewFlag = !!g.reviewFlag;
   it.review = g;
+}
+
+// 채점 실패(error)한 건을 다시 채점 대기(submitted)로 되돌린다 — 채점 큐가 다시 집어간다.
+async function retryGrading(it) {
+  const btn = document.getElementById("retryBtn");
+  btn.disabled = true; btn.textContent = "대기열에 넣는 중…";
+  try {
+    await updateDoc(doc(db, "submissions", it.id), { status: "submitted", gradeError: null });
+    it.status = "submitted";
+    it.gradeError = null;
+    renderList();
+    selectItem(it.id);
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "다시 채점";
+    alert("처리에 실패했습니다: " + e.message);
+  }
 }
 
 // "재채점" 버튼 클릭 핸들러: 확인창 + 버튼 로딩 상태 표시 후 performRegrade 실행.
@@ -526,7 +568,7 @@ async function runGrading() {
       statusEl.textContent = "채점할 새 제출물이 없습니다.";
       return;
     }
-    let done = 0, released = 0, flagged = 0, errors = 0;
+    let done = 0, flagged = 0, errors = 0;
     for (const s of subs) {
       statusEl.textContent = `채점 중… (${done + errors + 1}/${subs.length})`;
       try {
@@ -543,32 +585,33 @@ async function runGrading() {
         }
         await setDoc(doc(db, "reviews", s.id), g);
 
-        if (g.reviewFlag) {
-          // AI가 확인이 필요하다고 표시한 건은 교사 검토 대기로 남긴다.
-          await updateDoc(doc(db, "submissions", s.id), { status: "graded", gradedAt: serverTimestamp() });
-          flagged++;
-        } else {
-          // 확인 필요 없는 건은 채점과 동시에 바로 공개한다.
-          await updateDoc(doc(db, "submissions", s.id), {
-            status: "released",
-            gradedAt: serverTimestamp(),
-            releasedAt: serverTimestamp(),
-            grade: toFlatGrade(g),
-            feedback: g.feedback,
-            recognizedText: g.recognizedText,
-          });
-          released++;
-        }
+        // 채점 결과는 항상 교사 검토 대기(graded)로 둔다 — 채점 모델이 틀릴 수 있으므로
+        // 교사가 확인하고 공개해야 학생에게 점수가 보인다(grade.py와 동일한 정책).
+        // reviewFlag는 목록 배지에 쓰려고 제출물에도 복사해둔다(점수는 공개 전까지 복사 안 함).
+        await updateDoc(doc(db, "submissions", s.id), {
+          status: "graded",
+          gradedAt: serverTimestamp(),
+          reviewFlag: !!g.reviewFlag,
+          gradeError: null,
+        });
+        if (g.reviewFlag) flagged++;
         done++;
       } catch (e) {
         errors++;
         console.error(`[채점 오류] ${s.id}:`, e);
+        // 실패한 건을 submitted로 두면 아래 재시도에서 무한히 다시 채점하게 된다.
+        // error 상태로 표시해 큐에서 빼고, 교사가 화면에서 사유를 보고 재시도하게 한다.
+        try {
+          await updateDoc(doc(db, "submissions", s.id), {
+            status: "error", gradeError: String(e.message || e).slice(0, 300),
+          });
+        } catch (_) { /* 상태 기록 실패는 무시 */ }
       }
       if (subs.indexOf(s) < subs.length - 1) {
         await new Promise((r) => setTimeout(r, THROTTLE_MS));
       }
     }
-    statusEl.textContent = `채점 완료: ${done}건 (자동 공개 ${released}건, 확인 필요 ${flagged}건, 오류 ${errors}건)`;
+    statusEl.textContent = `채점 완료: ${done}건 (확인 필요 ${flagged}건, 오류 ${errors}건)`;
     // 목록은 실시간 구독(onSnapshot)이 자동으로 갱신한다.
   } catch (e) {
     statusEl.textContent = "채점 실패: " + e.message;
@@ -578,12 +621,13 @@ async function runGrading() {
   }
 
   // 채점 도중 새로 제출된 건이 있으면(자동 트리거가 "채점 중"이라 건너뛰었을 수 있음) 이어서 채점한다.
+  // 실패한 건은 error 상태라 이 쿼리에 안 잡히므로 무한 반복되지 않는다.
   const stillPending = await getDocs(query(collection(db, "submissions"), where("status", "==", "submitted")));
   if (!stillPending.empty) runGrading();
 }
 
-const STATUS_LABEL = { submitted: "채점 대기", graded: "검토 대기", released: "공개됨", rejected: "반려됨" };
-const STATUS_CLS   = { submitted: "s-none",   graded: "s-pending",  released: "s-done", rejected: "s-rejected" };
+const STATUS_LABEL = { submitted: "채점 대기", graded: "검토 대기", released: "공개됨", rejected: "반려됨", error: "채점 실패" };
+const STATUS_CLS   = { submitted: "s-none",   graded: "s-pending",  released: "s-done", rejected: "s-rejected", error: "s-flag" };
 
 function renderList() {
   const list = document.getElementById("t-list");
@@ -607,20 +651,21 @@ function renderList() {
 
   list.innerHTML = classes.map((cls) => {
     const items = byClass[cls].map((it) => {
-      const flag = it.review?.reviewFlag ? `<span class="badge s-flag">확인 필요</span>` : "";
+      const flag = it.reviewFlag ? `<span class="badge s-flag">확인 필요</span>` : "";
       const active = state.selected === it.id ? "active" : "";
-      const score = it.status === "released" ? it.grade?.total : it.review?.total;
+      // 공개 전 점수는 목록에도 띄우지 않는다(초안은 항목을 열었을 때만 조회).
+      const score = it.status === "released" ? it.grade?.total : null;
       const num = rosterMap[it.studentEmail]?.number;
-      const who = num ? `${num}번 ${it.studentEmail}` : it.studentEmail;
-      return `<button class="ws-item ${active}" data-id="${it.id}">
-          <span class="ws-code">${it.worksheetId} · ${who}</span>
+      const who = num ? `${num}번 ${escapeHtml(it.studentEmail)}` : escapeHtml(it.studentEmail);
+      return `<button class="ws-item ${active}" data-id="${escapeHtml(it.id)}">
+          <span class="ws-code">${escapeHtml(it.worksheetId)} · ${who}</span>
           <span>${score ?? "-"}점
-            <span class="badge ${STATUS_CLS[it.status] || "s-none"}">${STATUS_LABEL[it.status] || it.status}</span>
+            <span class="badge ${STATUS_CLS[it.status] || "s-none"}">${STATUS_LABEL[it.status] || escapeHtml(it.status)}</span>
             ${flag}
           </span>
         </button>`;
     }).join("");
-    return `<div class="unit"><div class="unit-title">${cls === "미확인" ? cls : cls + "반"}</div>${items}</div>`;
+    return `<div class="unit"><div class="unit-title">${cls === "미확인" ? cls : escapeHtml(String(cls)) + "반"}</div>${items}</div>`;
   }).join("");
   list.querySelectorAll(".ws-item").forEach((b) =>
     b.addEventListener("click", () => selectItem(b.dataset.id))
@@ -633,6 +678,12 @@ async function selectItem(id) {
   const it = state.items.find((x) => x.id === id);
   const main = document.getElementById("t-main");
 
+  // 채점 초안은 목록에서 미리 읽지 않고, 항목을 연 이 시점에 한 건만 읽는다.
+  if (it.review === undefined) {
+    const r = await getDoc(doc(db, "reviews", it.id));
+    it.review = r.exists() ? r.data() : null;
+  }
+
   const imgs = it.answerType === "text"
     ? `<p class="feedback">${escapeHtml(it.answerText || "")}</p>`
     : await pagesHtml(it.id);
@@ -643,8 +694,8 @@ async function selectItem(id) {
 
   const header = `
     <header class="main-head">
-      <h2>${it.worksheetId} · ${it.studentEmail}</h2>
-      <span class="badge ${STATUS_CLS[it.status] || "s-none"}">${STATUS_LABEL[it.status] || it.status}</span>
+      <h2>${escapeHtml(it.worksheetId)} · ${escapeHtml(it.studentEmail)}</h2>
+      <span class="badge ${STATUS_CLS[it.status] || "s-none"}">${STATUS_LABEL[it.status] || escapeHtml(it.status)}</span>
       <button class="btn ghost" id="completeBtn" style="margin-left:auto">${it.completed ? "완료 취소" : "과제 완료"}</button>
       <button class="btn ghost" id="deleteBtn">삭제</button>
     </header>`;
@@ -655,6 +706,15 @@ async function selectItem(id) {
         <h3>제출 답안</h3>${imgs}
         <p class="muted" style="margin-top:12px">아직 채점 전입니다. 위의 "지금 채점하기" 버튼을 눌러 채점하세요.</p>
       </section>`;
+  } else if (it.status === "error") {
+    main.innerHTML = `${header}
+      <section class="card">
+        <h3>제출 답안</h3>${imgs}
+        <p class="badge s-flag" style="margin:12px 0 0">채점 실패: ${escapeHtml(it.gradeError || "사유 미기록")}</p>
+        <p class="muted" style="margin-top:12px">원인을 확인한 뒤 아래 버튼으로 다시 채점할 수 있습니다.</p>
+        <button class="btn primary" id="retryBtn" style="margin-top:12px">다시 채점</button>
+      </section>`;
+    document.getElementById("retryBtn").addEventListener("click", () => retryGrading(it));
   } else if (it.status === "released") {
     const g = it.grade || {};
     const rows = [
@@ -858,7 +918,7 @@ async function rejectSubmission(it) {
   btn.disabled = true; btn.textContent = "반려 중…";
   try {
     await updateDoc(doc(db, "submissions", it.id), {
-      status: "rejected", rejectReason: reason, rejectedAt: serverTimestamp(),
+      status: "rejected", rejectReason: reason, rejectedAt: serverTimestamp(), reviewFlag: false,
     });
     it.status = "rejected";
     it.rejectReason = reason;
@@ -909,7 +969,8 @@ async function release(it) {
     };
     const feedback = document.getElementById("fbInput").value;
     const recognizedInput = document.getElementById("recognizedInput");
-    const update = { grade, feedback, status: "released", releasedAt: serverTimestamp() };
+    // 공개하면 교사 검토가 끝난 것이므로 "확인 필요" 배지도 내린다.
+    const update = { grade, feedback, status: "released", releasedAt: serverTimestamp(), reviewFlag: false };
     if (recognizedInput) update.recognizedText = recognizedInput.value;
 
     await updateDoc(doc(db, "submissions", it.id), update);
@@ -951,12 +1012,11 @@ async function deleteItem(it) {
 }
 
 async function pagesHtml(subId) {
-  const snap = await getDocs(query(collection(db, "submissions", subId, "pages"), orderBy("order")));
-  if (snap.empty) return `<p class="muted">이미지 없음</p>`;
-  return `<div class="imgs">` + snap.docs.map((d) => {
-    const src = d.data().imageBase64;
-    return `<img src="${src}" alt="제출 이미지">`;
-  }).join("") + `</div>`;
+  const imgs = await loadPageImages(subId);
+  if (!imgs.length) return `<p class="muted">이미지 없음</p>`;
+  return `<div class="imgs">` + imgs.map((src) =>
+    `<img src="${escapeHtml(src)}" alt="제출 이미지">`
+  ).join("") + `</div>`;
 }
 
 function escapeHtml(s) {

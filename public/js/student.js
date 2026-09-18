@@ -1,13 +1,14 @@
 import { db } from "./firebase-init.js";
 import {
-  collection, doc, query, where, orderBy, getDocs, getDoc, addDoc, updateDoc, deleteDoc,
+  collection, doc, query, where, orderBy, getDocs, getDoc, addDoc, deleteDoc,
   runTransaction, onSnapshot, serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 import { compressImage } from "./compress.js";
 import { wireLightboxImages } from "./lightbox.js";
 import { gradeFreeform } from "./grade.js";
 
-const MAX_ATTEMPTS = 5; // 최초 + 재제출 4회. 화면에만 표시되는 목표치이며, 넘어가도 제출 자체는 막지 않는다.
+// 최초 + 재제출 4회. firestore.rules 의 attempt <= 5 검증과 반드시 같은 값이어야 한다.
+const MAX_ATTEMPTS = 5;
 
 const STATUS = {
   none:     { key: "none",     label: "미제출",     cls: "s-none" },
@@ -132,8 +133,8 @@ function renderSidebar() {
     const items = byUnit[u].map((w) => {
       const st = statusOf(w.code);
       const active = state.selected === w.code ? "active" : "";
-      return `<button class="ws-item ${active}" data-code="${w.code}">
-          <span class="ws-code">${w.title || w.code}</span>
+      return `<button class="ws-item ${active}" data-code="${escapeHtml(w.code)}">
+          <span class="ws-code">${escapeHtml(w.title || w.code)}</span>
           <span class="badge ${st.cls}">${st.label}</span>
         </button>`;
     }).join("");
@@ -158,7 +159,7 @@ async function selectWorksheet(code) {
   // 헤더
   const st = statusOf(code);
   let body = `<header class="main-head">
-      <h2>${ws.title || ws.code}</h2>
+      <h2>${escapeHtml(ws.title || ws.code)}</h2>
       <span class="badge ${st.cls}">${st.label}</span>
     </header>`;
 
@@ -166,14 +167,19 @@ async function selectWorksheet(code) {
     body += `<section class="card"><h3>문제</h3><p class="feedback">${escapeHtml(ws.problem)}</p></section>`;
   }
 
-  // 공개되었거나 반려된 건 재제출 횟수와 무관하게 항상 다시 제출할 수 있다
-  // ("남은 제출 횟수"는 화면에만 보이는 목표치일 뿐, 실제로 더 이상의 제출을 막지는 않는다).
-  state.uploadFormRendered = !sub || sub.status === "released" || sub.status === "rejected";
+  // 공개되었거나 반려된 건 다시 제출할 수 있다. 제출 횟수 상한(MAX_ATTEMPTS)은
+  // 보안 규칙에서도 강제되므로, 다 쓴 경우엔 업로드 폼 대신 안내만 보여준다.
+  const attemptsLeft = MAX_ATTEMPTS - attempts > 0;
+  state.uploadFormRendered = attemptsLeft
+    && (!sub || sub.status === "released" || sub.status === "rejected");
   state.hasDraftInput = false;
   if (state.uploadFormRendered) {
     body += uploadPanel(attempts);
     if (sub && sub.status === "released") body += await resultPanel(sub); // 이전 공개 결과도 함께 보여줌
     if (sub && sub.status === "rejected") body += await rejectedPanel(sub); // 반려 사유 표시
+  } else if (sub && !attemptsLeft) {
+    body += `<section class="card"><p class="muted center">제출 횟수(${MAX_ATTEMPTS}회)를 모두 사용했습니다. 더 제출하려면 선생님께 문의하세요.</p></section>`;
+    body += sub.status === "released" ? await resultPanel(sub) : await pendingPanel(sub);
   } else {
     body += await pendingPanel(sub); // 검토 중
   }
@@ -181,7 +187,6 @@ async function selectWorksheet(code) {
   main.innerHTML = body;
   wireLightboxImages(main);
   wireUpload(code, attempts);
-  if (sub) wireRecognizedEdit(sub, code);
   const cancelBtn = document.getElementById("cancelBtn");
   if (cancelBtn) cancelBtn.addEventListener("click", () => cancelSubmission(sub, code));
 }
@@ -293,40 +298,14 @@ async function submittedContentHtml(sub) {
   }
   const imgsHtml = await pagesHtml(sub.id);
   if (!sub.recognizedText) return imgsHtml;
+  // 읽기 전용 — 이 문장이 채점 근거라, 학생이 고칠 수 있으면 사진은 그대로 둔 채
+  // 채점 대상만 바꿔치기할 수 있다(수정은 교사 화면에서만 가능).
   return imgsHtml + `
     <div class="recognized">
-      <div class="fb-head"><h4>사진으로 인식한 문장</h4><button class="btn ghost" id="editRecognizedBtn">수정</button></div>
-      <div id="recognizedView"><p class="feedback">${escapeHtml(sub.recognizedText)}</p></div>
+      <h4>사진으로 인식한 문장</h4>
+      <p class="feedback">${escapeHtml(sub.recognizedText)}</p>
+      <p class="muted small">잘못 인식된 부분이 있으면 선생님께 말씀해 주세요.</p>
     </div>`;
-}
-
-function wireRecognizedEdit(sub, code) {
-  const editBtn = document.getElementById("editRecognizedBtn");
-  if (!editBtn) return;
-  editBtn.addEventListener("click", () => {
-    document.getElementById("recognizedView").innerHTML = `
-      <textarea id="recognizedEdit" rows="4">${escapeHtml(sub.recognizedText || "")}</textarea>
-      <div class="fb-actions">
-        <button class="btn primary" id="saveRecognizedBtn">저장</button>
-        <button class="btn ghost" id="cancelRecognizedBtn">취소</button>
-      </div>`;
-    document.getElementById("cancelRecognizedBtn").addEventListener("click", () => selectWorksheet(code));
-    document.getElementById("saveRecognizedBtn").addEventListener("click", async () => {
-      const saveBtn = document.getElementById("saveRecognizedBtn");
-      saveBtn.disabled = true;
-      saveBtn.textContent = "저장 중…";
-      try {
-        const newText = document.getElementById("recognizedEdit").value;
-        await updateDoc(doc(db, "submissions", sub.id), { recognizedText: newText });
-        sub.recognizedText = newText;
-        selectWorksheet(code);
-      } catch (e) {
-        saveBtn.disabled = false;
-        saveBtn.textContent = "저장";
-        alert("저장에 실패했습니다: " + e.message);
-      }
-    });
-  });
 }
 
 async function pagesHtml(subId) {
@@ -338,10 +317,13 @@ async function pagesHtml(subId) {
     )
   );
   if (snap.empty) return `<p class="muted">이미지 없음</p>`;
-  return `<div class="imgs">` + snap.docs.map((d) => {
-    const src = d.data().imageBase64;
-    return `<img src="${src}" alt="제출 이미지">`;
-  }).join("") + `</div>`;
+  const imgs = snap.docs
+    .map((d) => d.data().imageBase64)
+    .filter((s) => typeof s === "string" && s.startsWith("data:image/"));
+  if (!imgs.length) return `<p class="muted">이미지 없음</p>`;
+  return `<div class="imgs">` + imgs.map((src) =>
+    `<img src="${escapeHtml(src)}" alt="제출 이미지">`
+  ).join("") + `</div>`;
 }
 
 function wireUpload(code, attempts) {

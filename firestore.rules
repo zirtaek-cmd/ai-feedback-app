@@ -22,17 +22,30 @@ service cloud.firestore {
     }
 
     // 제출물: 본인 것만 생성/읽기. 채점 전(submitted) 취소, 공개(released)·반려(rejected)된
-    // 건 재제출 시 이전 자료 자동 삭제를 위해 본인이 삭제 가능. 그 외 수정(=공개 처리 등)은 관리자만.
+    // 건 재제출 시 이전 자료 자동 삭제를 위해 본인이 삭제 가능. 수정(=채점·공개·반려)은 관리자만.
     match /submissions/{submissionId} {
+      // 학생이 만드는 문서라 필드를 그대로 믿으면 안 된다. worksheetId 는 실제 학습지
+      // 문서가 있어야 하고, 상태·점수 같은 채점 결과 필드는 생성 시 못 넣게 막는다
+      // (교사 화면이 이 값들을 그대로 그리므로 검증 없이 두면 주입 통로가 된다).
+      function validNewSubmission() {
+        return request.resource.data.studentUid == request.auth.uid
+          && request.resource.data.studentEmail == request.auth.token.email
+          && request.resource.data.status == "submitted"
+          && request.resource.data.worksheetId is string
+          && exists(/databases/$(database)/documents/worksheets/$(request.resource.data.worksheetId))
+          && request.resource.data.answerType in ["photo", "text"]
+          && request.resource.data.attempt is int
+          && request.resource.data.attempt > 0
+          && request.resource.data.attempt <= 5
+          && !request.resource.data.keys().hasAny(["grade", "feedback", "recognizedText", "reviewFlag", "gradeError", "completed", "archived"]);
+      }
+
       allow read:   if isAdmin() ||
                        (isSignedIn() && resource.data.studentUid == request.auth.uid);
-      allow create: if isInRoster()
-                    && request.resource.data.studentUid == request.auth.uid
-                    && request.resource.data.studentEmail == request.auth.token.email;
-      // 수정: 관리자는 전체 필드, 본인은 recognizedText(사진으로 인식한 문장)만 고칠 수 있음.
-      allow update: if isAdmin() ||
-                       (isSignedIn() && resource.data.studentUid == request.auth.uid
-                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["recognizedText"]));
+      allow create: if isInRoster() && validNewSubmission();
+      // 수정은 관리자 전용. 학생이 recognizedText(채점 근거가 되는 문장)를 고칠 수 있으면
+      // 사진은 그대로 둔 채 채점 대상만 바꿔치기할 수 있어 허용하지 않는다.
+      allow update: if isAdmin();
       allow delete: if isAdmin() ||
                        (isSignedIn() && resource.data.studentUid == request.auth.uid
                         && (resource.data.status == "submitted" || resource.data.status == "released"
@@ -43,8 +56,12 @@ service cloud.firestore {
       match /pages/{pageId} {
         allow read:   if isAdmin() ||
                          (isSignedIn() && resource.data.studentUid == request.auth.uid);
+        // imageBase64 는 교사 화면에서 <img src> 로 쓰이므로 실제 이미지 데이터 URL만 허용한다.
         allow create: if isInRoster()
-                      && request.resource.data.studentUid == request.auth.uid;
+                      && request.resource.data.studentUid == request.auth.uid
+                      && request.resource.data.imageBase64 is string
+                      && request.resource.data.imageBase64[0:11] == "data:image/"
+                      && request.resource.data.order is int;
         allow update: if isAdmin();
         allow delete: if isAdmin() ||
                          (isSignedIn() && resource.data.studentUid == request.auth.uid
