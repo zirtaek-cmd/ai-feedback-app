@@ -41,13 +41,14 @@ Wrks 에이전트 없이 직접 명령어로 배포할 때만 필요합니다.
 8. **관리자 설정**: `seed/admins.json`에 등록한 계정으로 웹에 1회 로그인 → `python seed_import.py` 재실행 → 재로그인.
 
 ## 운영 루틴
-- **02:00~16:30**: 교사가 웹 교사 화면에서 직접 채점("지금 채점하기", 화면이 열려 있으면 자동) → 검토 → 공개.
-- **16:30~02:00**: GitHub Actions 가 5분마다 `grade.py` 실행 → 문제없는 건은 바로 학생에게 공개,
-  "확인 필요" 건만 검토 대기로 남김 → 다음 날 교사가 검토·공개.
+- **근무 시간(평일 02:00~16:30, 주말 02:00~09:00)**: 교사가 웹 교사 화면에서 직접 채점("지금 채점하기", 화면이 열려 있으면 자동) → 검토 → 공개.
+- **그 외(평일 16:30~02:00, 주말 09:00~02:00)**: GitHub Actions 가 5분마다 `grade.py` 실행 → 문제없는 건은 바로 학생에게 공개,
+  "확인 필요" 건만 검토 대기로 남김 → 다음에 교사가 검토·공개.
 
 ## 자동 채점 (GitHub Actions) 설정
-`.github/workflows/grade.yml` 이 매일 16:30~02:00(KST)에 5분마다 `grade.py` 를 돌린다. 시간대는 워크플로의 cron(UTC)과
-`ACTIVE_WINDOW` 변수(KST)가 같이 정하며, 그 밖의 시간에 강제로 돌리려면 "Run workflow" 에서 force 를 true 로 준다. 한 번만 설정하면 된다.
+`.github/workflows/grade.yml` 이 평일 16:30~02:00, 주말 09:00~02:00(KST)에 5분마다 `grade.py` 를 돌린다. 시간대는 워크플로의
+cron(UTC)과 `ACTIVE_WINDOW`·`ACTIVE_WINDOW_WEEKEND` 변수(KST)가 같이 정하며, 그 밖의 시간에 강제로 돌리려면 "Run workflow" 에서
+force 를 true 로 준다. 한 번만 설정하면 된다.
 
 1. **Firestore 전용 서비스 계정 만들기** — Google Cloud 콘솔 → IAM 및 관리자 → 서비스 계정 → 만들기.
    역할은 `Cloud Datastore 사용자` 하나만 준다(프로젝트 전체 권한인 기본 키를 쓰지 말 것).
@@ -57,7 +58,7 @@ Wrks 에이전트 없이 직접 명령어로 배포할 때만 필요합니다.
    - `GEMINI_API_KEY`: Google AI Studio 키
 3. **(선택) Variables** — 같은 화면의 Variables 탭. 없으면 기본값을 쓴다.
    `GEMINI_MODEL`(기본 gemini-3.5-flash-lite), `AUTO_RELEASE`(`0` 이면 전부 교사 검토 대기), `THROTTLE_SEC`(기본 5),
-   `ACTIVE_WINDOW`(기본 `16:30-02:00`, KST, 자정 넘김 가능)
+   `ACTIVE_WINDOW`(평일, 기본 `16:30-02:00`), `ACTIVE_WINDOW_WEEKEND`(토·일, 기본 `09:00-02:00`) — KST, 자정 넘김 가능
 4. **저장소 Actions 설정** — Settings → Actions → General: "Allow all actions" 그대로, Fork pull request workflows 는
    "Require approval for all outside collaborators" 로. 협업자는 본인 계정만 둔다.
 5. Actions 탭 → grade → "Run workflow" 로 한 번 수동 실행해 초록불을 확인한다.

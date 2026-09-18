@@ -2,9 +2,9 @@
 grade.py — 채점 대기 제출물을 Gemini로 채점하고, 문제없는 건은 바로 학생에게 공개한다.
 
   사용: python grade.py            (GitHub Actions 가 5분마다 실행. 로컬에서도 동일)
-                                    매일 16:30~02:00(KST)에만 실제로 채점하고, 그 밖의 시간은
-                                    교사가 웹에서 직접 채점하므로 아무것도 하지 않고 끝난다
-                                    (ACTIVE_WINDOW, --force 참고).
+                                    평일 16:30~02:00, 주말 09:00~02:00(KST)에만 실제로 채점하고,
+                                    그 밖의 시간은 교사가 웹에서 직접 채점하므로 아무것도 하지 않고
+                                    끝난다(ACTIVE_WINDOW, ACTIVE_WINDOW_WEEKEND, --force 참고).
         python grade.py --dry-run [제출물ID]
                                     (쓰기 없이 채점만 해 보고 결과를 출력. ID 를 주면 그 건만,
                                      안 주면 채점 대기 건 전부. 파이프라인 점검용)
@@ -13,7 +13,8 @@ grade.py — 채점 대기 제출물을 Gemini로 채점하고, 문제없는 건
       또는 serviceAccountKey.json 파일(로컬·gitignore)
     - GEMINI_API_KEY (Actions 는 Secrets, 로컬은 .env)
     - 선택: GEMINI_MODEL, THROTTLE_SEC, AUTO_RELEASE("0" 이면 전부 교사 검토 대기로 둠),
-            ACTIVE_WINDOW(기본 "16:30-02:00", KST, 자정 넘김 가능. 이 시간대에만 실행. "" 이면 항상 실행)
+            ACTIVE_WINDOW(평일, 기본 "16:30-02:00"), ACTIVE_WINDOW_WEEKEND(토·일, 기본 "09:00-02:00")
+            — KST, 자정 넘김 가능, 그 시간대에만 실행. 둘 다 "" 이면 항상 실행
   흐름:
     submissions.status == "submitted" 조회
       → 각 제출의 pages(이미지) 또는 answerText 로드
@@ -52,26 +53,46 @@ AUTO_RELEASE   = (os.environ.get("AUTO_RELEASE") or "1") not in ("0", "false", "
 DRY_RUN        = "--dry-run" in sys.argv
 FORCE_RUN      = "--force" in sys.argv or (os.environ.get("FORCE_RUN") or "") in ("1", "true")
 # 서버 채점이 도는 시간대(KST). 그 밖의 시간(수업·근무 중)은 교사가 웹에서 직접 채점한다.
-ACTIVE_WINDOW  = os.environ.get("ACTIVE_WINDOW", "16:30-02:00")
+# 구간은 "그 날 시작 시각 ~ (자정을 넘겨) 끝 시각"이며, 토·일은 따로 준다.
+ACTIVE_WINDOW         = os.environ.get("ACTIVE_WINDOW") or "16:30-02:00"          # 월~금
+ACTIVE_WINDOW_WEEKEND = os.environ.get("ACTIVE_WINDOW_WEEKEND") or "09:00-02:00"  # 토·일
 KST = timezone(timedelta(hours=9))
 
 
-def in_active_window(now=None):
-    """ACTIVE_WINDOW("16:30-02:00") 안이면 True. 끝이 시작보다 이르면 자정을 넘기는 구간으로 본다.
-    비어 있으면 항상 True, 형식이 이상해도 True(=실행)."""
-    if not ACTIVE_WINDOW.strip():
-        return True
+def _parse_window(spec):
+    """"16:30-02:00" → ((16,30),(2,0)). 비어 있거나 형식이 이상하면 None(=항상 실행)."""
+    if not spec.strip():
+        return None
     try:
-        h1, h2 = ACTIVE_WINDOW.split("-")
-        t1 = tuple(int(x) for x in h1.split(":"))
-        t2 = tuple(int(x) for x in h2.split(":"))
+        h1, h2 = spec.split("-")
+        return tuple(int(x) for x in h1.split(":")), tuple(int(x) for x in h2.split(":"))
     except ValueError:
-        print(f"ACTIVE_WINDOW 형식 오류({ACTIVE_WINDOW!r}) → 무시하고 실행")
+        print(f"시간대 형식 오류({spec!r}) → 무시하고 실행")
+        return None
+
+
+def _window_for(isoweekday):
+    return ACTIVE_WINDOW_WEEKEND if isoweekday >= 6 else ACTIVE_WINDOW
+
+
+def in_active_window(now=None):
+    """지금이 서버 채점 시간대면 True. 오늘 구간(시작 이후)이거나, 어제 구간이 자정을 넘긴
+    꼬리(끝 시각 이전)에 있으면 True. 예: 월 16:30-02:00 → 월 16:30~화 01:59."""
+    now = now or datetime.now(KST)
+    t = (now.hour, now.minute)
+    today = _parse_window(_window_for(now.isoweekday()))
+    yesterday = _parse_window(_window_for((now - timedelta(days=1)).isoweekday()))
+    if today is None and yesterday is None:
         return True
-    t = ((now or datetime.now(KST)).hour, (now or datetime.now(KST)).minute)
-    if t1 <= t2:
-        return t1 <= t < t2
-    return t >= t1 or t < t2   # 예: 16:30-02:00
+    if today:
+        s, e = today
+        if (s <= e and s <= t < e) or (s > e and t >= s):
+            return True
+    if yesterday:
+        s, e = yesterday
+        if s > e and t < e:   # 어제 구간이 자정을 넘긴 부분
+            return True
+    return False
 
 # ---------- 채점 결과 스키마 ----------
 class Criterion(BaseModel):
@@ -314,7 +335,8 @@ def grade_submission(sub_id, data):
 
 def main():
     if not FORCE_RUN and not DRY_RUN and not in_active_window():
-        print(f"서버 채점 시간대({ACTIVE_WINDOW} KST) 밖이라 건너뜀. 지금 {datetime.now(KST):%H:%M}")
+        print(f"서버 채점 시간대(평일 {ACTIVE_WINDOW}, 주말 {ACTIVE_WINDOW_WEEKEND} KST) 밖이라 건너뜀. "
+              f"지금 {datetime.now(KST):%a %H:%M}")
         return
     only_id = next((a for a in sys.argv[1:] if not a.startswith("--")), None)
     if only_id:
