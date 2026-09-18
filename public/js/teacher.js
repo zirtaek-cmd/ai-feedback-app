@@ -7,6 +7,24 @@ import { wireLightboxImages } from "./lightbox.js";
 
 const THROTTLE_MS = 4000; // 무료 등급 RPM 대응
 
+// 서버(GitHub Actions, grade.py)가 채점하는 시간대. grade.py 의 ACTIVE_WINDOW / ACTIVE_WINDOW_WEEKEND
+// 와 같은 값이어야 한다. 이 시간에는 교사 화면을 열어 둬도 브라우저가 스스로 채점을 시작하지
+// 않는다(서버와 같은 건을 두 번 채점하거나, 서버가 공개한 걸 되돌리는 일을 막기 위해).
+// "지금 채점하기" 버튼은 시간과 무관하게 언제나 동작한다.
+const SERVER_WINDOW_WEEKDAY = [[16, 30], [2, 0]]; // 월~금 16:30 ~ 다음 날 02:00
+const SERVER_WINDOW_WEEKEND = [[9, 0], [2, 0]];   // 토·일 09:00 ~ 다음 날 02:00
+
+function inServerWindow(now = new Date()) {
+  const t = now.getHours() * 60 + now.getMinutes();
+  const win = (d) => (d.getDay() === 0 || d.getDay() === 6) ? SERVER_WINDOW_WEEKEND : SERVER_WINDOW_WEEKDAY;
+  const mins = ([h, m]) => h * 60 + m;
+  const [s1, e1] = win(now).map(mins);                           // 오늘 구간
+  if (s1 <= e1 ? (t >= s1 && t < e1) : t >= s1) return true;
+  const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+  const [s2, e2] = win(yesterday).map(mins);                     // 어제 구간이 자정을 넘긴 꼬리
+  return s2 > e2 && t < e2;
+}
+
 // 채점 초안(reviews) 문서 키. 제출물 ID로 키를 잡으면 학생이 재제출할 때마다
 // (새 제출물 = 새 ID) 이전 초안이 짝을 잃고 영구히 남는다. 학생+학습지로 키를 잡으면
 // 재제출해도 같은 문서를 덮어쓰므로 문서 수가 (학생 수 x 학습지 수)로 고정된다.
@@ -148,7 +166,8 @@ function startListening() {
     if (isGrading) return;
 
     // 새로 제출된(=아직 채점 전인) 건이 있으면 버튼을 누른 것처럼 자동 채점한다.
-    // 관리자 화면이 열려 있는 동안만 동작한다.
+    // 관리자 화면이 열려 있는 동안만, 그리고 서버가 채점하지 않는 시간에만 동작한다.
+    if (inServerWindow()) return;
     if (items.some((it) => it.status === "submitted")) runGrading();
   });
 }
@@ -660,7 +679,7 @@ async function runGrading() {
   // 채점 도중 새로 제출된 건이 있으면(자동 트리거가 "채점 중"이라 건너뛰었을 수 있음) 이어서 채점한다.
   // 실패한 건은 error 상태라 이 쿼리에 안 잡히므로 무한 반복되지 않는다.
   const stillPending = await getDocs(query(collection(db, "submissions"), where("status", "==", "submitted")));
-  if (!stillPending.empty) runGrading();
+  if (!stillPending.empty && !inServerWindow()) runGrading();
 }
 
 const STATUS_LABEL = { submitted: "채점 대기", graded: "검토 대기", released: "공개됨", rejected: "반려됨", error: "채점 실패" };
