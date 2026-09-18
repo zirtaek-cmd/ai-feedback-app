@@ -114,6 +114,23 @@ summary.unit-title:hover { background: var(--grey-soft); }
   color: var(--muted); transition: transform .15s;
 }
 .unit[open] > .unit-title .unit-title-row::after { transform: rotate(90deg); }
+/* 단원 구역(반 안, 학습지 그룹 위): 학습지 그룹과 같은 왼쪽 화살표 방식으로 접고 편다.
+   안의 학습지 그룹은 한 단계 들여써서 반 > 단원 > 학습지 층위가 보이게 한다. */
+.chapter { margin: 0 0 8px; }
+.chapter-title {
+  display: block; padding: 7px 8px; border-radius: 8px; cursor: pointer;
+  user-select: none; font-size: 13px; font-weight: 700; color: var(--ink);
+  list-style: none;
+}
+.chapter-title::-webkit-details-marker { display: none; }
+.chapter-title:hover { background: var(--grey-soft); }
+.chapter-title-row { display: flex; align-items: center; gap: 8px; }
+.chapter-title-row::before {
+  content: "▸"; display: inline-block; width: 12px;
+  color: var(--muted); transition: transform .15s;
+}
+.chapter[open] > .chapter-title .chapter-title-row::before { transform: rotate(90deg); }
+.chapter > .ws-group { margin-left: 8px; }
 .ws-group { margin-bottom: 6px; }
 /* <summary> 자체는 flex 를 주지 않는다(사파리가 접기 버튼의 기본 여백을 완전히
    지우지 않아서 안의 글자가 밀려 보이는 문제가 생김). 대신 안에 감싼

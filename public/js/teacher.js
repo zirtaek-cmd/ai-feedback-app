@@ -43,6 +43,14 @@ let worksheetTitleMap = {}; // worksheetId  -> title (목록의 학습지 그룹
 const expandedGroups = new Set();
 // 반 구역은 기본으로 펼쳐 두고, 교사가 접은 반("1", "2", "미확인")만 여기에 기억한다.
 const collapsedClasses = new Set();
+// 반 안의 단원 구역("반|단원번호")도 기본으로 펼쳐 두고, 교사가 접은 것만 기억한다.
+const collapsedChapters = new Set();
+
+// 학습지 코드 앞 숫자가 단원이다("4-1-1" → "4", "5-2-3" → "5"). 숫자로 안 시작하면 "기타".
+function unitOf(wsId) {
+  const m = /^(\d+)/.exec(String(wsId));
+  return m ? m[1] : "기타";
+}
 
 // 목록 정렬·그룹핑(반별 구역, 학습지 번호순)에 쓸 명단/학습지 순서를 불러온다.
 // 명단 107명 + 학습지 9개라 탭을 옮길 때마다 다시 읽으면 116회씩 읽기가 쌓인다.
@@ -760,29 +768,58 @@ function renderList() {
         ${groups}
       </details>`;
   };
+  // 반 안에서 학습지 그룹을 단원별("4단원", "5단원")로 한 번 더 묶는다.
+  const renderChapter = (cls, unit, groups) => {
+    const key = `${cls}|${unit}`;
+    const open = collapsedChapters.has(key) ? "" : " open";
+    const label = unit === "기타" ? "기타" : `${unit}단원`;
+    return `<details class="chapter" data-key="${escapeHtml(key)}"${open}>
+        <summary class="chapter-title"><span class="chapter-title-row">${escapeHtml(label)}</span></summary>
+        ${groups}
+      </details>`;
+  };
+  // 학습지 순서를 유지한 채 단원별로 나눈다: [["4", ["4-1-1", ...]], ["5", [...]]]
+  const groupByUnit = (ids) => {
+    const byUnit = {};
+    const order = [];
+    ids.forEach((id) => {
+      const u = unitOf(id);
+      if (!byUnit[u]) { byUnit[u] = []; order.push(u); }
+      byUnit[u].push(id);
+    });
+    return order.map((u) => [u, byUnit[u]]);
+  };
+  const unitsOfAll = groupByUnit(wsIds);
 
   let html = classes.map((cls) => {
     const students = byClassRoster[cls];
-    const groups = wsIds.map((wsId) => {
-      let submitted = 0;
-      const rows = students.map((st) => {
-        const it = subMap[`${st.email}|${wsId}`];
-        if (it) submitted += 1;
-        return it ? renderItem(it) : renderMissing(st);
+    const chapters = unitsOfAll.map(([unit, ids]) => {
+      const groups = ids.map((wsId) => {
+        let submitted = 0;
+        const rows = students.map((st) => {
+          const it = subMap[`${st.email}|${wsId}`];
+          if (it) submitted += 1;
+          return it ? renderItem(it) : renderMissing(st);
+        }).join("");
+        return renderGroup(cls, wsId, rows, `${submitted}/${students.length}`);
       }).join("");
-      return renderGroup(cls, wsId, rows, `${submitted}/${students.length}`);
+      return renderChapter(String(cls), unit, groups);
     }).join("");
-    return renderUnit(String(cls), `${cls}반`, groups);
+    return renderUnit(String(cls), `${cls}반`, chapters);
   }).join("");
 
   if (unknown.length) {
     const byWs = {};
     unknown.forEach((it) => (byWs[it.worksheetId] ||= []).push(it));
-    const groups = Object.keys(byWs)
-      .sort((a, b) => (worksheetOrderMap[a] ?? 999) - (worksheetOrderMap[b] ?? 999))
-      .map((wsId) => renderGroup("미확인", wsId, byWs[wsId].map(renderItem).join(""), byWs[wsId].length))
-      .join("");
-    html += renderUnit("미확인", "미확인", groups);
+    const unknownIds = Object.keys(byWs)
+      .sort((a, b) => (worksheetOrderMap[a] ?? 999) - (worksheetOrderMap[b] ?? 999));
+    const chapters = groupByUnit(unknownIds).map(([unit, ids]) => {
+      const groups = ids
+        .map((wsId) => renderGroup("미확인", wsId, byWs[wsId].map(renderItem).join(""), byWs[wsId].length))
+        .join("");
+      return renderChapter("미확인", unit, groups);
+    }).join("");
+    html += renderUnit("미확인", "미확인", chapters);
   }
 
   list.innerHTML = html;
@@ -801,6 +838,12 @@ function renderList() {
       else collapsedClasses.add(d.dataset.class);
     })
   );
+  list.querySelectorAll(".chapter").forEach((d) =>
+    d.addEventListener("toggle", () => {
+      if (d.open) collapsedChapters.delete(d.dataset.key);
+      else collapsedChapters.add(d.dataset.key);
+    })
+  );
 }
 
 async function selectItem(id) {
@@ -811,6 +854,7 @@ async function selectItem(id) {
     const cls = String(rosterMap[it.studentEmail]?.class ?? "미확인");
     expandedGroups.add(`${cls}|${it.worksheetId}`);
     collapsedClasses.delete(cls);
+    collapsedChapters.delete(`${cls}|${unitOf(it.worksheetId)}`);
   }
   renderList();
   const main = document.getElementById("t-main");
