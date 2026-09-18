@@ -724,7 +724,7 @@ function renderList() {
     const who = num ? `${num}번 ${escapeHtml(it.studentEmail)}` : escapeHtml(it.studentEmail);
     return `<button class="ws-item ${active}" data-id="${escapeHtml(it.id)}">
         <span class="ws-code">${who}</span>
-        <span>${score ?? "-"}점
+        <span class="ws-meta"><span>${score ?? "-"}점</span>
           ${statusBadge(it)}
           ${flag}${edited}
         </span>
@@ -733,7 +733,7 @@ function renderList() {
   const renderMissing = (st) =>
     `<button class="ws-item missing" disabled>
         <span class="ws-code">${st.number}번 ${escapeHtml(st.email)}</span>
-        <span><span class="badge s-none">미제출</span></span>
+        <span class="ws-meta"><span class="badge s-none">미제출</span></span>
       </button>`;
 
   const wsTitle = (wsId) => {
