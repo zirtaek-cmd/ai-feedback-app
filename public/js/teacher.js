@@ -495,17 +495,19 @@ function toFlatGrade(g) {
 }
 
 // 실제 재채점 로직만 수행한다(DOM 조작 없음) — 버튼 클릭과 자동 재채점 양쪽에서 공용으로 쓴다.
-async function performRegrade(it) {
+// source: "text" = 저장된 판독 문장으로 채점(기본, 토큰 절약)
+//         "photo" = 사진을 다시 읽어서 채점(학생이 문장을 고쳤을 때 원본 확인용)
+async function performRegrade(it, source = "text") {
   const wsSnap = await getDoc(doc(db, "worksheets", it.worksheetId));
   const wsData = wsSnap.exists() ? wsSnap.data() : {};
   let g;
   if (it.answerType === "text") {
     g = await gradeText(wsData.problem, it.answerText || "", wsData.referenceMaterial);
-  } else if (it.recognizedText) {
+  } else if (source === "text" && it.recognizedText) {
     // 이미 인식된 문장이 있으면 이미지를 다시 보내지 않고 텍스트로 재채점(토큰 절약).
     g = await gradeText(wsData.problem, it.recognizedText, wsData.referenceMaterial);
   } else {
-    // 인식된 문장이 없는(이 기능 이전에 채점된) 예전 항목만 이미지로 재채점.
+    // 사진 재판독 요청이거나, 인식된 문장이 없는(이 기능 이전에 채점된) 예전 항목.
     const imgs = await loadPageImages(it.id);
     if (!imgs.length) throw new Error("이미지 없음");
     g = await gradeImages(imgs, wsData.referenceMaterial);
@@ -541,17 +543,19 @@ async function retryGrading(it) {
 }
 
 // "재채점" 버튼 클릭 핸들러: 확인창 + 버튼 로딩 상태 표시 후 performRegrade 실행.
-async function regradeItem(it) {
-  if (!confirm(`${it.worksheetId} · ${it.studentEmail} 항목을 다시 채점할까요?\n기존 점수·피드백이 새 결과로 덮어써집니다.`)) return;
-  const btn = document.getElementById("regradeBtn");
+async function regradeItem(it, source = "text", btnId = "regradeBtn") {
+  const what = source === "photo" ? "사진을 다시 읽어서" : "저장된 문장으로";
+  if (!confirm(`${it.worksheetId} · ${it.studentEmail} 항목을 ${what} 다시 채점할까요?\n기존 점수·피드백이 새 결과로 덮어써집니다.`)) return;
+  const btn = document.getElementById(btnId);
+  const label = btn.textContent;
   btn.disabled = true;
   btn.textContent = "재채점 중…";
   try {
-    await performRegrade(it);
+    await performRegrade(it, source);
     selectItem(it.id);
   } catch (e) {
     btn.disabled = false;
-    btn.textContent = "재채점";
+    btn.textContent = label;
     alert("재채점에 실패했습니다: " + e.message);
   }
 }
@@ -725,17 +729,29 @@ async function selectItem(id) {
     ].map(([label, val, max]) =>
       `<div class="crit"><span>${label}</span><b>${val ?? "-"} / ${max}</b></div>`
     ).join("");
-    // 학생이 판독 문장을 고친 경우, 점수는 그대로이므로 사진과 대조한 뒤
-    // 재채점할지 교사가 판단하도록 눈에 띄게 알린다.
-    const studentEditedNote = it.recognizedEditedBy === "student"
-      ? `<p class="badge s-flag" style="margin:8px 0 0">학생이 이 문장을 수정했습니다 — 사진과 대조한 뒤 재채점하세요.</p>`
-      : "";
-    const recognizedSection = it.answerType !== "text" ? `
+    // 학생이 판독 문장을 고친 경우: 무엇이 바뀌었는지 원문과 나란히 보여주고,
+    // 재채점 기준(고친 문장 / 사진 재판독)을 교사가 직접 고르게 한다.
+    // 사진 제출물이라도 재채점은 기본적으로 문장으로만 하기 때문에(토큰 절약),
+    // 고른 기준에 따라 점수가 달라질 수 있다.
+    const studentEdited = it.recognizedEditedBy === "student";
+    const recognizedSection = it.answerType !== "text" ? (studentEdited ? `
+      <div class="recognized">
+        <h4>사진으로 인식한 문장</h4>
+        <p class="badge s-flag" style="margin:0 0 10px">학생이 이 문장을 고쳤습니다 — 사진과 대조해 어느 쪽으로 채점할지 골라주세요.</p>
+        <label class="fb-label">AI가 사진에서 읽은 문장</label>
+        <p class="feedback">${escapeHtml(it.review?.recognizedText || "(기록 없음)")}</p>
+        <label class="fb-label" style="margin-top:10px">학생이 고친 문장</label>
+        <div id="recognizedView"><p class="feedback">${escapeHtml(recognizedText)}</p></div>
+        <div class="review-actions" style="margin-top:12px">
+          <button class="btn primary" id="regradeTextBtn">수정된 문장으로 재채점</button>
+          <button class="btn ghost" id="regradePhotoBtn">사진 다시 읽어서 재채점</button>
+        </div>
+        <button class="btn ghost" id="editRecognizedBtn" style="margin-top:6px">문장 직접 고치기</button>
+      </div>` : `
       <div class="recognized">
         <div class="fb-head"><h4>사진으로 인식한 문장</h4><button class="btn ghost" id="editRecognizedBtn">수정</button></div>
         <div id="recognizedView"><p class="feedback">${escapeHtml(recognizedText)}</p></div>
-        ${studentEditedNote}
-      </div>` : "";
+      </div>`) : "";
     main.innerHTML = `${header}
       <section class="card">
         <div class="two">
@@ -744,7 +760,7 @@ async function selectItem(id) {
             <div class="score-head">
               <div class="score"><span>${g.total ?? "-"}</span><small>/ 100</small></div>
               <div class="review-actions">
-                <button class="btn ghost" id="regradeBtn">재채점</button>
+                ${studentEdited ? "" : `<button class="btn ghost" id="regradeBtn">재채점</button>`}
                 <button class="btn ghost" id="editScoreBtn">점수 수정</button>
                 <button class="btn danger" id="rejectBtn">반려</button>
               </div>
@@ -834,7 +850,15 @@ async function selectItem(id) {
       });
     }
 
-    document.getElementById("regradeBtn").addEventListener("click", () => regradeItem(it));
+    if (studentEdited) {
+      document.getElementById("regradeTextBtn")
+        .addEventListener("click", () => regradeItem(it, "text", "regradeTextBtn"));
+      document.getElementById("regradePhotoBtn")
+        .addEventListener("click", () => regradeItem(it, "photo", "regradePhotoBtn"));
+    } else {
+      document.getElementById("regradeBtn")
+        .addEventListener("click", () => regradeItem(it, "text", "regradeBtn"));
+    }
   } else if (it.status === "rejected") {
     main.innerHTML = `${header}
       <section class="card">
