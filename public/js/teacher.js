@@ -35,7 +35,7 @@ function reviewKey(sub) {
 let state = { items: [], selected: null, tab: "review" };
 let unsubscribeItems = null;
 let isGrading = false;
-let rosterMap = {};        // studentEmail -> { class, number }
+let rosterMap = {};        // studentEmail -> { class, number, excluded? }
 let worksheetOrderMap = {}; // worksheetId  -> order
 let worksheetTitleMap = {}; // worksheetId  -> title (목록의 학습지 그룹 제목)
 // 목록에서 교사가 펼쳐 둔 학습지 그룹("반|학습지코드"). 기본은 접힘이고, 스냅샷이 올 때마다
@@ -706,9 +706,11 @@ function renderList() {
   const subMap = {}; // "email|worksheetId" -> submission
   state.items.forEach((it) => { subMap[`${it.studentEmail}|${it.worksheetId}`] = it; });
 
-  const byClassRoster = {}; // class -> [{ email, number }]
+  // excluded(열외: 도움반 등)인 학생은 행은 그대로 그리되 "제출/전체" 집계에서만 뺀다.
+  // 학생도 교사 화면을 보므로 열외 표시는 화면에 따로 내지 않는다.
+  const byClassRoster = {}; // class -> [{ email, number, excluded }]
   Object.entries(rosterMap).forEach(([email, r]) => {
-    (byClassRoster[r.class] ||= []).push({ email, number: r.number ?? 999 });
+    (byClassRoster[r.class] ||= []).push({ email, number: r.number ?? 999, excluded: r.excluded === true });
   });
   Object.values(byClassRoster).forEach((arr) => arr.sort((a, b) => a.number - b.number));
   const classes = Object.keys(byClassRoster).map(Number).sort((a, b) => a - b);
@@ -794,14 +796,15 @@ function renderList() {
   let html = classes.map((cls) => {
     const students = byClassRoster[cls];
     const chapters = unitsOfAll.map(([unit, ids]) => {
+      const counted = students.filter((st) => !st.excluded).length;
       const groups = ids.map((wsId) => {
         let submitted = 0;
         const rows = students.map((st) => {
           const it = subMap[`${st.email}|${wsId}`];
-          if (it) submitted += 1;
+          if (it && !st.excluded) submitted += 1;
           return it ? renderItem(it) : renderMissing(st);
         }).join("");
-        return renderGroup(cls, wsId, rows, `${submitted}/${students.length}`);
+        return renderGroup(cls, wsId, rows, `${submitted}/${counted}`);
       }).join("");
       return renderChapter(String(cls), unit, groups);
     }).join("");
