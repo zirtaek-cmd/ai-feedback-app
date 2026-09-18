@@ -140,10 +140,9 @@ summary.unit-title:hover { background: var(--grey-soft); }
 }
 .ws-item:hover { background: var(--grey-soft); }
 .ws-item.active { background: var(--indigo-soft); }
-.ws-code { font-weight: 600; flex: 1; min-width: 0; }
+.ws-code { font-weight: 600; }
 /* 오른쪽 상태 영역(점수·배지)은 항상 우측 정렬 */
-.ws-item > :last-child { flex-shrink: 0; margin-left: auto; text-align: right; }
-.ws-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.ws-item > :last-child { margin-left: auto; text-align: right; }
 
 /* 배지 */
 .badge { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
