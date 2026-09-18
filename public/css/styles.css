@@ -99,10 +99,15 @@ body {
 
 /* 사이드바 항목 */
 .unit { margin-bottom: 18px; }
+/* 반 구역 제목: 학습지 그룹과 같은 방식(details/summary)으로 접고 편다. */
 .unit-title {
   font-size: 13px; font-weight: 700; color: var(--muted);
   padding: 4px 8px; margin-bottom: 4px;
 }
+summary.unit-title { display: block; list-style: none; cursor: pointer; user-select: none; border-radius: 8px; }
+summary.unit-title::-webkit-details-marker { display: none; }
+summary.unit-title:hover { background: var(--grey-soft); }
+.unit[open] > .unit-title .ws-group-title-row::before { transform: rotate(90deg); }
 .ws-group { margin-bottom: 6px; }
 /* <summary> 자체는 flex 를 주지 않는다(사파리가 접기 버튼의 기본 여백을 완전히
    지우지 않아서 안의 글자가 밀려 보이는 문제가 생김). 대신 안에 감싼
@@ -136,6 +141,7 @@ body {
 .s-none { background: var(--grey-soft); color: var(--muted); }
 .s-pending { background: var(--amber-soft); color: var(--amber); }
 .s-done { background: var(--green-soft); color: var(--green); }
+.s-complete { background: var(--indigo-soft); color: var(--indigo-dark); }
 .s-flag { background: #fdeceb; color: #b42318; }
 .s-rejected { background: var(--red-soft); color: var(--red); }
 
@@ -281,3 +287,7 @@ body {
   .two, .crit-grid { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* 미제출 학생 행: 열 제출물이 없으므로 클릭 불가 */
+.ws-item.missing { cursor: default; opacity: .55; }
+.ws-item.missing:hover { background: transparent; }

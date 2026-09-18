@@ -41,6 +41,8 @@ let worksheetTitleMap = {}; // worksheetId  -> title (목록의 학습지 그룹
 // 목록에서 교사가 펼쳐 둔 학습지 그룹("반|학습지코드"). 기본은 접힘이고, 스냅샷이 올 때마다
 // 목록을 다시 그리므로 DOM 의 open 상태 대신 여기에 기억해 둔다.
 const expandedGroups = new Set();
+// 반 구역은 기본으로 펼쳐 두고, 교사가 접은 반("1", "2", "미확인")만 여기에 기억한다.
+const collapsedClasses = new Set();
 
 // 목록 정렬·그룹핑(반별 구역, 학습지 번호순)에 쓸 명단/학습지 순서를 불러온다.
 // 명단 107명 + 학습지 9개라 탭을 옮길 때마다 다시 읽으면 116회씩 읽기가 쌓인다.
@@ -73,13 +75,11 @@ export async function renderTeacher(access) {
   root.innerHTML = `
     <div class="tabs">
       <button class="tab active" id="tabReview">제출물 검토</button>
-      <button class="tab" id="tabCompleted">완료된 과제</button>
       <button class="tab" id="tabWorksheets">학습지 문제 관리</button>
       <button class="tab" id="tabRoster">학생 명단</button>
     </div>
     <div id="t-body"></div>`;
   document.getElementById("tabReview").addEventListener("click", () => switchTab("review"));
-  document.getElementById("tabCompleted").addEventListener("click", () => switchTab("completed"));
   document.getElementById("tabWorksheets").addEventListener("click", () => switchTab("worksheets"));
   document.getElementById("tabRoster").addEventListener("click", () => switchTab("roster"));
   await switchTab("review");
@@ -87,26 +87,24 @@ export async function renderTeacher(access) {
 
 async function switchTab(tab) {
   document.getElementById("tabReview").classList.toggle("active", tab === "review");
-  document.getElementById("tabCompleted").classList.toggle("active", tab === "completed");
   document.getElementById("tabWorksheets").classList.toggle("active", tab === "worksheets");
   document.getElementById("tabRoster").classList.toggle("active", tab === "roster");
   const body = document.getElementById("t-body");
   state.tab = tab;
   state.selected = null;
-  if (tab === "review" || tab === "completed") {
+  if (tab === "review") {
     body.innerHTML = `
-      ${tab === "review" ? `<div class="grade-bar">
+      <div class="grade-bar">
         <button class="btn primary" id="gradeBtn">지금 채점하기</button>
         <span class="muted small" id="gradeStatus"></span>
         <span class="muted small">평일 16:30~02:00, 주말 09:00~02:00에는 서버가 5분마다 자동 채점·공개합니다(확인 필요 건은 검토 대기).</span>
-      </div>` : ""}
+      </div>
       <div class="layout">
         <aside class="sidebar" id="t-list"></aside>
-        <main class="main" id="t-main"><p class="muted center">왼쪽에서 ${tab === "review" ? "검토할" : "확인할"} 제출물을 선택하세요.</p></main>
+        <main class="main" id="t-main"><p class="muted center">왼쪽에서 검토할 제출물을 선택하세요.</p></main>
       </div>`;
-    if (tab === "review") document.getElementById("gradeBtn").addEventListener("click", runGrading);
-    // 검토 탭과 완료 탭은 같은 제출물 목록을 필터만 달리해서 쓴다. 이미 구독 중이면
-    // 끊었다 다시 붙이지 않는다(재구독은 목록 전체를 다시 읽어올 수 있어 비싸다).
+    document.getElementById("gradeBtn").addEventListener("click", runGrading);
+    // 이미 구독 중이면 끊었다 다시 붙이지 않는다(재구독은 목록 전체를 다시 읽어올 수 있어 비싸다).
     if (unsubscribeItems) renderList();
     else startListening();
   } else if (tab === "worksheets") {
@@ -685,26 +683,36 @@ async function runGrading() {
 const STATUS_LABEL = { submitted: "채점 대기", graded: "검토 대기", released: "공개됨", rejected: "반려됨", error: "채점 실패" };
 const STATUS_CLS   = { submitted: "s-none",   graded: "s-pending",  released: "s-done", rejected: "s-rejected", error: "s-flag" };
 
+// 교사가 "과제 완료"를 누른 건은 원래 상태 대신 "완료"로 표시한다(별도 탭 없음).
+function statusBadge(it) {
+  if (it.completed) return `<span class="badge s-complete">완료</span>`;
+  return `<span class="badge ${STATUS_CLS[it.status] || "s-none"}">${STATUS_LABEL[it.status] || escapeHtml(it.status)}</span>`;
+}
+
 function renderList() {
   const list = document.getElementById("t-list");
   if (!list) return; // 다른 탭으로 옮긴 뒤 뒤늦게 도착한 스냅샷
-  const visible = state.items.filter((it) => !!it.completed === (state.tab === "completed"));
-  if (!visible.length) {
-    list.innerHTML = `<p class="muted center">${state.tab === "completed" ? "완료된 과제가 없습니다." : "제출물이 없습니다."}</p>`;
+
+  // 제출물 유무와 상관없이 명단의 모든 반 → 모든 학습지 → 반 학생 전원을 그린다.
+  // 제출물이 없는 학생은 "미제출" 행(비활성)으로 채운다.
+  const subMap = {}; // "email|worksheetId" -> submission
+  state.items.forEach((it) => { subMap[`${it.studentEmail}|${it.worksheetId}`] = it; });
+
+  const byClassRoster = {}; // class -> [{ email, number }]
+  Object.entries(rosterMap).forEach(([email, r]) => {
+    (byClassRoster[r.class] ||= []).push({ email, number: r.number ?? 999 });
+  });
+  Object.values(byClassRoster).forEach((arr) => arr.sort((a, b) => a.number - b.number));
+  const classes = Object.keys(byClassRoster).map(Number).sort((a, b) => a - b);
+  const wsIds = Object.keys(worksheetOrderMap).sort((a, b) => worksheetOrderMap[a] - worksheetOrderMap[b]);
+
+  // 명단에 없는 이메일의 제출물은 따로 "미확인" 구역에 모은다(예전과 동일).
+  const unknown = state.items.filter((it) => !rosterMap[it.studentEmail]);
+
+  if (!classes.length && !unknown.length) {
+    list.innerHTML = `<p class="muted center">제출물이 없습니다.</p>`;
     return;
   }
-
-  // 이미 반→학습지순으로 정렬된 목록(state.items)을 반 단위 구역으로 묶어서 그린다.
-  const byClass = {};
-  visible.forEach((it) => {
-    const cls = rosterMap[it.studentEmail]?.class ?? "미확인";
-    (byClass[cls] ||= []).push(it);
-  });
-  const classes = Object.keys(byClass).sort((a, b) => {
-    if (a === "미확인") return 1;
-    if (b === "미확인") return -1;
-    return Number(a) - Number(b);
-  });
 
   const renderItem = (it) => {
     const flag = it.reviewFlag ? `<span class="badge s-flag">확인 필요</span>` : "";
@@ -717,36 +725,68 @@ function renderList() {
     return `<button class="ws-item ${active}" data-id="${escapeHtml(it.id)}">
         <span class="ws-code">${who}</span>
         <span>${score ?? "-"}점
-          <span class="badge ${STATUS_CLS[it.status] || "s-none"}">${STATUS_LABEL[it.status] || escapeHtml(it.status)}</span>
+          ${statusBadge(it)}
           ${flag}${edited}
         </span>
       </button>`;
   };
+  const renderMissing = (st) =>
+    `<button class="ws-item missing" disabled>
+        <span class="ws-code">${st.number}번 ${escapeHtml(st.email)}</span>
+        <span><span class="badge s-none">미제출</span></span>
+      </button>`;
 
-  list.innerHTML = classes.map((cls) => {
-    // 반 구역 안을 다시 학습지별 접기/펴기 그룹으로 나눈다(정렬은 이미 학습지 번호순).
-    const byWs = {};
-    const wsOrder = [];
-    byClass[cls].forEach((it) => {
-      if (!byWs[it.worksheetId]) { byWs[it.worksheetId] = []; wsOrder.push(it.worksheetId); }
-      byWs[it.worksheetId].push(it);
-    });
-    const groups = wsOrder.map((wsId) => {
-      const key = `${cls}|${wsId}`;
-      const items = byWs[wsId];
-      const open = expandedGroups.has(key) ? " open" : "";
-      // 이 앱의 학습지는 title 이 code 와 같은 값으로 등록돼 있어(예: "4-2-2") 그냥 붙이면
-      // "4-2-2 · 4-2-2" 처럼 중복 표시된다. title 이 code 와 다를 때만 같이 보여준다.
-      const t = worksheetTitleMap[wsId];
-      const title = (t && t !== wsId) ? `${escapeHtml(wsId)} · ${escapeHtml(t)}` : escapeHtml(wsId);
-      return `<details class="ws-group" data-key="${escapeHtml(key)}"${open}>
-          <summary class="ws-group-title"><span class="ws-group-title-row">${title}</span></summary>
-          ${items.map(renderItem).join("")}
-        </details>`;
+  const wsTitle = (wsId) => {
+    // 이 앱의 학습지는 title 이 code 와 같은 값으로 등록돼 있어(예: "4-2-2") 그냥 붙이면
+    // "4-2-2 · 4-2-2" 처럼 중복 표시된다. title 이 code 와 다를 때만 같이 보여준다.
+    const t = worksheetTitleMap[wsId];
+    return (t && t !== wsId) ? `${escapeHtml(wsId)} · ${escapeHtml(t)}` : escapeHtml(wsId);
+  };
+  const renderGroup = (cls, wsId, rows, count) => {
+    const key = `${cls}|${wsId}`;
+    const open = expandedGroups.has(key) ? " open" : "";
+    return `<details class="ws-group" data-key="${escapeHtml(key)}"${open}>
+        <summary class="ws-group-title"><span class="ws-group-title-row">
+          <span>${wsTitle(wsId)}</span><span class="muted small">${count}</span>
+        </span></summary>
+        ${rows}
+      </details>`;
+  };
+
+  const renderUnit = (key, label, groups) => {
+    const open = collapsedClasses.has(key) ? "" : " open";
+    return `<details class="unit" data-class="${escapeHtml(key)}"${open}>
+        <summary class="unit-title"><span class="ws-group-title-row">${escapeHtml(label)}</span></summary>
+        ${groups}
+      </details>`;
+  };
+
+  let html = classes.map((cls) => {
+    const students = byClassRoster[cls];
+    const groups = wsIds.map((wsId) => {
+      let submitted = 0;
+      const rows = students.map((st) => {
+        const it = subMap[`${st.email}|${wsId}`];
+        if (it) submitted += 1;
+        return it ? renderItem(it) : renderMissing(st);
+      }).join("");
+      return renderGroup(cls, wsId, rows, `${submitted}/${students.length}`);
     }).join("");
-    return `<div class="unit"><div class="unit-title">${cls === "미확인" ? cls : escapeHtml(String(cls)) + "반"}</div>${groups}</div>`;
+    return renderUnit(String(cls), `${cls}반`, groups);
   }).join("");
-  list.querySelectorAll(".ws-item").forEach((b) =>
+
+  if (unknown.length) {
+    const byWs = {};
+    unknown.forEach((it) => (byWs[it.worksheetId] ||= []).push(it));
+    const groups = Object.keys(byWs)
+      .sort((a, b) => (worksheetOrderMap[a] ?? 999) - (worksheetOrderMap[b] ?? 999))
+      .map((wsId) => renderGroup("미확인", wsId, byWs[wsId].map(renderItem).join(""), byWs[wsId].length))
+      .join("");
+    html += renderUnit("미확인", "미확인", groups);
+  }
+
+  list.innerHTML = html;
+  list.querySelectorAll(".ws-item[data-id]").forEach((b) =>
     b.addEventListener("click", () => selectItem(b.dataset.id))
   );
   list.querySelectorAll(".ws-group").forEach((d) =>
@@ -755,13 +795,23 @@ function renderList() {
       else expandedGroups.delete(d.dataset.key);
     })
   );
+  list.querySelectorAll(".unit").forEach((d) =>
+    d.addEventListener("toggle", () => {
+      if (d.open) collapsedClasses.delete(d.dataset.class);
+      else collapsedClasses.add(d.dataset.class);
+    })
+  );
 }
 
 async function selectItem(id) {
   state.selected = id;
   const it = state.items.find((x) => x.id === id);
   // 선택한 항목이 든 그룹은 펼쳐 둔다(접힌 채로 선택 표시만 남지 않도록).
-  if (it) expandedGroups.add(`${rosterMap[it.studentEmail]?.class ?? "미확인"}|${it.worksheetId}`);
+  if (it) {
+    const cls = String(rosterMap[it.studentEmail]?.class ?? "미확인");
+    expandedGroups.add(`${cls}|${it.worksheetId}`);
+    collapsedClasses.delete(cls);
+  }
   renderList();
   const main = document.getElementById("t-main");
   if (!it || !main) return; // 클릭 직전에 목록에서 사라졌거나(학생 취소 등) 탭이 바뀐 경우
@@ -783,7 +833,7 @@ async function selectItem(id) {
   const header = `
     <header class="main-head">
       <h2>${escapeHtml(it.worksheetId)} · ${escapeHtml(it.studentEmail)}</h2>
-      <span class="badge ${STATUS_CLS[it.status] || "s-none"}">${STATUS_LABEL[it.status] || escapeHtml(it.status)}</span>
+      ${statusBadge(it)}
       <button class="btn ghost" id="completeBtn" style="margin-left:auto">${it.completed ? "완료 취소" : "과제 완료"}</button>
       <button class="btn ghost" id="deleteBtn">삭제</button>
     </header>`;
@@ -999,10 +1049,8 @@ async function toggleComplete(it) {
   try {
     await updateDoc(doc(db, "submissions", it.id), { completed: newVal });
     it.completed = newVal;
-    state.selected = null;
-    renderList();
-    document.getElementById("t-main").innerHTML =
-      `<p class="muted center">${newVal ? "완료된 과제로 이동했습니다." : "제출물 검토로 되돌렸습니다."}</p>`;
+    // 별도 탭이 없으므로 항목을 그대로 열어 둔 채 목록·헤더의 배지만 "완료"로 바꾼다.
+    await selectItem(it.id);
   } catch (e) {
     btn.disabled = false;
     alert("처리에 실패했습니다: " + e.message);
