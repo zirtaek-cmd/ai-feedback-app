@@ -1,9 +1,10 @@
 """
 grade.py — 채점 대기 제출물을 Gemini로 채점하고, 문제없는 건은 바로 학생에게 공개한다.
 
-  사용: python grade.py            (GitHub Actions 가 10분마다 실행. 로컬에서도 동일)
-                                    평일 09:00~16:15(KST)는 교사가 웹에서 직접 채점하는 시간이라
-                                    아무것도 하지 않고 끝난다(MANUAL_WINDOW, --force 참고).
+  사용: python grade.py            (GitHub Actions 가 5분마다 실행. 로컬에서도 동일)
+                                    매일 16:30~02:00(KST)에만 실제로 채점하고, 그 밖의 시간은
+                                    교사가 웹에서 직접 채점하므로 아무것도 하지 않고 끝난다
+                                    (ACTIVE_WINDOW, --force 참고).
         python grade.py --dry-run [제출물ID]
                                     (쓰기 없이 채점만 해 보고 결과를 출력. ID 를 주면 그 건만,
                                      안 주면 채점 대기 건 전부. 파이프라인 점검용)
@@ -12,7 +13,7 @@ grade.py — 채점 대기 제출물을 Gemini로 채점하고, 문제없는 건
       또는 serviceAccountKey.json 파일(로컬·gitignore)
     - GEMINI_API_KEY (Actions 는 Secrets, 로컬은 .env)
     - 선택: GEMINI_MODEL, THROTTLE_SEC, AUTO_RELEASE("0" 이면 전부 교사 검토 대기로 둠),
-            MANUAL_WINDOW(기본 "1-5 09:00-16:15", 1=월…7=일, KST. 이 시간대에는 건너뜀. "" 이면 항상 실행)
+            ACTIVE_WINDOW(기본 "16:30-02:00", KST, 자정 넘김 가능. 이 시간대에만 실행. "" 이면 항상 실행)
   흐름:
     submissions.status == "submitted" 조회
       → 각 제출의 pages(이미지) 또는 answerText 로드
@@ -50,26 +51,27 @@ THROTTLE_SEC   = float(os.environ.get("THROTTLE_SEC") or "5")               # �
 AUTO_RELEASE   = (os.environ.get("AUTO_RELEASE") or "1") not in ("0", "false", "no")
 DRY_RUN        = "--dry-run" in sys.argv
 FORCE_RUN      = "--force" in sys.argv or (os.environ.get("FORCE_RUN") or "") in ("1", "true")
-# 교사가 웹에서 직접 채점하는 시간대(KST). 이 시간에는 서버 채점이 끼어들지 않는다.
-MANUAL_WINDOW  = os.environ.get("MANUAL_WINDOW", "1-5 09:00-16:15")
+# 서버 채점이 도는 시간대(KST). 그 밖의 시간(수업·근무 중)은 교사가 웹에서 직접 채점한다.
+ACTIVE_WINDOW  = os.environ.get("ACTIVE_WINDOW", "16:30-02:00")
 KST = timezone(timedelta(hours=9))
 
 
-def in_manual_window(now=None):
-    """MANUAL_WINDOW("1-5 09:00-16:15") 안이면 True. 형식이 이상하면 False(=실행)."""
-    if not MANUAL_WINDOW.strip():
-        return False
+def in_active_window(now=None):
+    """ACTIVE_WINDOW("16:30-02:00") 안이면 True. 끝이 시작보다 이르면 자정을 넘기는 구간으로 본다.
+    비어 있으면 항상 True, 형식이 이상해도 True(=실행)."""
+    if not ACTIVE_WINDOW.strip():
+        return True
     try:
-        days, hours = MANUAL_WINDOW.split()
-        d1, d2 = (int(x) for x in days.split("-"))
-        h1, h2 = hours.split("-")
+        h1, h2 = ACTIVE_WINDOW.split("-")
         t1 = tuple(int(x) for x in h1.split(":"))
         t2 = tuple(int(x) for x in h2.split(":"))
     except ValueError:
-        print(f"MANUAL_WINDOW 형식 오류({MANUAL_WINDOW!r}) → 무시하고 실행")
-        return False
-    now = now or datetime.now(KST)
-    return d1 <= now.isoweekday() <= d2 and t1 <= (now.hour, now.minute) < t2
+        print(f"ACTIVE_WINDOW 형식 오류({ACTIVE_WINDOW!r}) → 무시하고 실행")
+        return True
+    t = ((now or datetime.now(KST)).hour, (now or datetime.now(KST)).minute)
+    if t1 <= t2:
+        return t1 <= t < t2
+    return t >= t1 or t < t2   # 예: 16:30-02:00
 
 # ---------- 채점 결과 스키마 ----------
 class Criterion(BaseModel):
@@ -311,8 +313,8 @@ def grade_submission(sub_id, data):
 
 
 def main():
-    if not FORCE_RUN and not DRY_RUN and in_manual_window():
-        print(f"교사 수동 채점 시간대({MANUAL_WINDOW} KST)라 건너뜀. 지금 {datetime.now(KST):%a %H:%M}")
+    if not FORCE_RUN and not DRY_RUN and not in_active_window():
+        print(f"서버 채점 시간대({ACTIVE_WINDOW} KST) 밖이라 건너뜀. 지금 {datetime.now(KST):%H:%M}")
         return
     only_id = next((a for a in sys.argv[1:] if not a.startswith("--")), None)
     if only_id:

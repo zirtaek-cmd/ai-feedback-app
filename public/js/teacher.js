@@ -80,7 +80,7 @@ async function switchTab(tab) {
       ${tab === "review" ? `<div class="grade-bar">
         <button class="btn primary" id="gradeBtn">지금 채점하기</button>
         <span class="muted small" id="gradeStatus"></span>
-        <span class="muted small">평일 09:00~16:15 외 시간과 주말에는 서버가 10분마다 자동 채점·공개합니다(확인 필요 건은 검토 대기).</span>
+        <span class="muted small">16:30~02:00에는 서버가 5분마다 자동 채점·공개합니다(확인 필요 건은 검토 대기).</span>
       </div>` : ""}
       <div class="layout">
         <aside class="sidebar" id="t-list"></aside>
