@@ -179,7 +179,9 @@ async function selectWorksheet(code) {
     if (sub && sub.status === "rejected") body += await rejectedPanel(sub); // 반려 사유 표시
   } else if (sub && !attemptsLeft) {
     body += `<section class="card"><p class="muted center">제출 횟수(${MAX_ATTEMPTS}회)를 모두 사용했습니다. 더 제출하려면 선생님께 문의하세요.</p></section>`;
-    body += sub.status === "released" ? await resultPanel(sub) : await pendingPanel(sub);
+    if (sub.status === "released") body += await resultPanel(sub);
+    else if (sub.status === "rejected") body += await rejectedPanel(sub);
+    else body += await pendingPanel(sub);
   } else {
     body += await pendingPanel(sub); // 검토 중
   }

@@ -14,9 +14,16 @@ let rosterMap = {};        // studentEmail -> { class, number }
 let worksheetOrderMap = {}; // worksheetId  -> order
 
 // 목록 정렬·그룹핑(반별 구역, 학습지 번호순)에 쓸 명단/학습지 순서를 불러온다.
-// 매 탭 전환마다 새로 불러오되(한 번 실패하면 계속 비어있는 캐시 버그를 피하기 위해
-// 영구 캐시는 두지 않는다), 제출물 구독과 동시에 진행해 기다리는 시간을 줄인다.
+// 명단 107명 + 학습지 9개라 탭을 옮길 때마다 다시 읽으면 116회씩 읽기가 쌓인다.
+// 그래서 짧게 캐시하되, 결과가 비어 있으면(실패·권한 문제 등) 캐시하지 않고 다음에
+// 다시 시도한다 — 한 번 실패하면 영영 빈 채로 굳던 예전 방식의 재발 방지.
+const ROSTER_TTL_MS = 5 * 60 * 1000;
+let rosterLoadedAt = 0;
+
 async function loadRosterAndWorksheets() {
+  const fresh = rosterLoadedAt && (Date.now() - rosterLoadedAt) < ROSTER_TTL_MS;
+  if (fresh && Object.keys(rosterMap).length && Object.keys(worksheetOrderMap).length) return;
+
   const [rosterSnap, wsSnap] = await Promise.all([
     getDocs(collection(db, "roster")),
     getDocs(collection(db, "worksheets")),
@@ -25,6 +32,7 @@ async function loadRosterAndWorksheets() {
   rosterSnap.docs.forEach((d) => { rosterMap[d.id] = d.data(); });
   worksheetOrderMap = {};
   wsSnap.docs.forEach((d) => { worksheetOrderMap[d.id] = d.data().order ?? 0; });
+  rosterLoadedAt = (rosterSnap.size && wsSnap.size) ? Date.now() : 0;
 }
 
 export async function renderTeacher(access) {
@@ -63,7 +71,10 @@ async function switchTab(tab) {
         <main class="main" id="t-main"><p class="muted center">왼쪽에서 ${tab === "review" ? "검토할" : "확인할"} 제출물을 선택하세요.</p></main>
       </div>`;
     if (tab === "review") document.getElementById("gradeBtn").addEventListener("click", runGrading);
-    startListening();
+    // 검토 탭과 완료 탭은 같은 제출물 목록을 필터만 달리해서 쓴다. 이미 구독 중이면
+    // 끊었다 다시 붙이지 않는다(재구독은 목록 전체를 다시 읽어올 수 있어 비싸다).
+    if (unsubscribeItems) renderList();
+    else startListening();
   } else if (tab === "worksheets") {
     stopListening();
     await renderWorksheetAdmin(body);
@@ -563,19 +574,22 @@ async function regradeItem(it, source = "text", btnId = "regradeBtn") {
 async function runGrading() {
   if (isGrading) return; // 이미 채점 중이면(자동/수동 무관) 중복 실행 방지
   isGrading = true;
+  // 채점 버튼/상태 표시는 "제출물 검토" 탭에만 있다. 완료 탭이나 다른 탭에 있는 동안
+  // 자동 채점이 돌 수 있으므로 없을 때를 대비한다.
   const btn = document.getElementById("gradeBtn");
   const statusEl = document.getElementById("gradeStatus");
-  btn.disabled = true;
+  const setStatus = (t) => { if (statusEl) statusEl.textContent = t; };
+  if (btn) btn.disabled = true;
   try {
     const snap = await getDocs(query(collection(db, "submissions"), where("status", "==", "submitted")));
     const subs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     if (!subs.length) {
-      statusEl.textContent = "채점할 새 제출물이 없습니다.";
+      setStatus("채점할 새 제출물이 없습니다.");
       return;
     }
     let done = 0, flagged = 0, errors = 0;
     for (const s of subs) {
-      statusEl.textContent = `채점 중… (${done + errors + 1}/${subs.length})`;
+      setStatus(`채점 중… (${done + errors + 1}/${subs.length})`);
       try {
         const wsSnap = await getDoc(doc(db, "worksheets", s.worksheetId));
         const wsData = wsSnap.exists() ? wsSnap.data() : {};
@@ -616,12 +630,12 @@ async function runGrading() {
         await new Promise((r) => setTimeout(r, THROTTLE_MS));
       }
     }
-    statusEl.textContent = `채점 완료: ${done}건 (확인 필요 ${flagged}건, 오류 ${errors}건)`;
+    setStatus(`채점 완료: ${done}건 (확인 필요 ${flagged}건, 오류 ${errors}건)`);
     // 목록은 실시간 구독(onSnapshot)이 자동으로 갱신한다.
   } catch (e) {
-    statusEl.textContent = "채점 실패: " + e.message;
+    setStatus("채점 실패: " + e.message);
   } finally {
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
     isGrading = false;
   }
 

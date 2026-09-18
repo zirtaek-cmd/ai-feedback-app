@@ -37,7 +37,7 @@ service cloud.firestore {
           && request.resource.data.attempt is int
           && request.resource.data.attempt > 0
           && request.resource.data.attempt <= 5
-          && !request.resource.data.keys().hasAny(["grade", "feedback", "recognizedText", "reviewFlag", "gradeError", "completed", "archived"]);
+          && !request.resource.data.keys().hasAny(["grade", "feedback", "recognizedText", "recognizedEditedBy", "reviewFlag", "gradeError", "completed", "archived"]);
       }
 
       allow read:   if isAdmin() ||
@@ -46,8 +46,11 @@ service cloud.firestore {
       // 수정: 관리자는 전체 필드. 학생은 사진 판독이 틀렸을 때를 대비해 recognizedText 만
       // 고칠 수 있다. 고쳐도 점수는 바뀌지 않고(자동 재채점 없음), 교사가 사진과 대조한 뒤
       // 재채점을 눌러야 반영된다. 누가 고쳤는지 교사 화면에 표시하려고 표식도 함께 남긴다.
+      // 공개된 뒤에만 고칠 수 있다 — 채점·검토가 진행 중인 문서를 학생이 건드리지 못하게.
       allow update: if isAdmin() ||
                        (isSignedIn() && resource.data.studentUid == request.auth.uid
+                        && resource.data.status == "released"
+                        && request.resource.data.status == "released"
                         && request.resource.data.diff(resource.data).affectedKeys()
                              .hasOnly(["recognizedText", "recognizedEditedBy"])
                         && request.resource.data.recognizedEditedBy == "student"
