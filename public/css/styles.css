@@ -107,7 +107,13 @@ body {
 summary.unit-title { display: block; list-style: none; cursor: pointer; user-select: none; border-radius: 8px; }
 summary.unit-title::-webkit-details-marker { display: none; }
 summary.unit-title:hover { background: var(--grey-soft); }
-.unit[open] > .unit-title .ws-group-title-row::before { transform: rotate(90deg); }
+/* 반 제목의 화살표는 글자 오른쪽에 둔다 — 학습지 그룹의 왼쪽 화살표와 구분되게. */
+.unit-title-row { display: inline-flex; align-items: center; gap: 6px; }
+.unit-title-row::after {
+  content: "▸"; display: inline-block; width: 12px;
+  color: var(--muted); transition: transform .15s;
+}
+.unit[open] > .unit-title .unit-title-row::after { transform: rotate(90deg); }
 .ws-group { margin-bottom: 6px; }
 /* <summary> 자체는 flex 를 주지 않는다(사파리가 접기 버튼의 기본 여백을 완전히
    지우지 않아서 안의 글자가 밀려 보이는 문제가 생김). 대신 안에 감싼

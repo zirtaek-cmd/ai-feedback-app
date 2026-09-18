@@ -756,7 +756,7 @@ function renderList() {
   const renderUnit = (key, label, groups) => {
     const open = collapsedClasses.has(key) ? "" : " open";
     return `<details class="unit" data-class="${escapeHtml(key)}"${open}>
-        <summary class="unit-title"><span class="ws-group-title-row">${escapeHtml(label)}</span></summary>
+        <summary class="unit-title"><span class="unit-title-row">${escapeHtml(label)}</span></summary>
         ${groups}
       </details>`;
   };
