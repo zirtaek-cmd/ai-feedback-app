@@ -783,31 +783,33 @@ function renderList() {
     const t = worksheetTitleMap[wsId];
     return (t && t !== wsId) ? `${escapeHtml(wsId)} · ${escapeHtml(t)}` : escapeHtml(wsId);
   };
-  const renderGroup = (cls, wsId, rows, count) => {
+  // 아래에 안 열어 본 채점 완료 제출(NEW)이 하나라도 있으면 그룹 제목에도 NEW 를 붙인다.
+  const groupNew = (n) => (n > 0 ? ' <span class="badge s-new">NEW</span>' : "");
+  const renderGroup = (cls, wsId, rows, count, newCount = 0) => {
     const key = `${cls}|${wsId}`;
     const open = expandedGroups.has(key) ? " open" : "";
     return `<details class="ws-group" data-key="${escapeHtml(key)}"${open}>
         <summary class="ws-group-title"><span class="ws-group-title-row">
-          <span>${wsTitle(wsId)}</span><span class="muted small">${count}</span>
+          <span>${wsTitle(wsId)}${groupNew(newCount)}</span><span class="muted small">${count}</span>
         </span></summary>
         ${rows}
       </details>`;
   };
 
-  const renderUnit = (key, label, groups) => {
+  const renderUnit = (key, label, groups, newCount = 0) => {
     const open = collapsedClasses.has(key) ? "" : " open";
     return `<details class="unit" data-class="${escapeHtml(key)}"${open}>
-        <summary class="unit-title"><span class="unit-title-row">${escapeHtml(label)}</span></summary>
+        <summary class="unit-title"><span class="unit-title-row">${escapeHtml(label)}${groupNew(newCount)}</span></summary>
         ${groups}
       </details>`;
   };
   // 반 안에서 학습지 그룹을 단원별("4단원", "5단원")로 한 번 더 묶는다.
-  const renderChapter = (cls, unit, groups) => {
+  const renderChapter = (cls, unit, groups, newCount = 0) => {
     const key = `${cls}|${unit}`;
     const open = expandedChapters.has(key) ? " open" : "";
     const label = unit === "기타" ? "기타" : `${unit}단원`;
     return `<details class="chapter" data-key="${escapeHtml(key)}"${open}>
-        <summary class="chapter-title"><span class="chapter-title-row">${escapeHtml(label)}</span></summary>
+        <summary class="chapter-title"><span class="chapter-title-row">${escapeHtml(label)}${groupNew(newCount)}</span></summary>
         ${groups}
       </details>`;
   };
@@ -826,20 +828,26 @@ function renderList() {
 
   let html = classes.map((cls) => {
     const students = byClassRoster[cls];
+    let classNew = 0;
     const chapters = unitsOfAll.map(([unit, ids]) => {
       const counted = students.filter((st) => !st.excluded).length;
+      let unitNew = 0;
       const groups = ids.map((wsId) => {
         let submitted = 0;
+        let newCount = 0;
         const rows = students.map((st) => {
           const it = subMap[`${st.email}|${wsId}`];
           if (it && !st.excluded) submitted += 1;
+          if (it && isNewItem(it)) newCount += 1;
           return it ? renderItem(it) : renderMissing(st);
         }).join("");
-        return renderGroup(cls, wsId, rows, `${submitted}/${counted}`);
+        unitNew += newCount;
+        return renderGroup(cls, wsId, rows, `${submitted}/${counted}`, newCount);
       }).join("");
-      return renderChapter(String(cls), unit, groups);
+      classNew += unitNew;
+      return renderChapter(String(cls), unit, groups, unitNew);
     }).join("");
-    return renderUnit(String(cls), `${cls}반`, chapters);
+    return renderUnit(String(cls), `${cls}반`, chapters, classNew);
   }).join("");
 
   if (unknown.length) {
@@ -847,13 +855,20 @@ function renderList() {
     unknown.forEach((it) => (byWs[it.worksheetId] ||= []).push(it));
     const unknownIds = Object.keys(byWs)
       .sort((a, b) => (worksheetOrderMap[a] ?? 999) - (worksheetOrderMap[b] ?? 999));
+    let unknownNew = 0;
     const chapters = groupByUnit(unknownIds).map(([unit, ids]) => {
+      let unitNew = 0;
       const groups = ids
-        .map((wsId) => renderGroup("미확인", wsId, byWs[wsId].map(renderItem).join(""), byWs[wsId].length))
+        .map((wsId) => {
+          const newCount = byWs[wsId].filter(isNewItem).length;
+          unitNew += newCount;
+          return renderGroup("미확인", wsId, byWs[wsId].map(renderItem).join(""), byWs[wsId].length, newCount);
+        })
         .join("");
-      return renderChapter("미확인", unit, groups);
+      unknownNew += unitNew;
+      return renderChapter("미확인", unit, groups, unitNew);
     }).join("");
-    html += renderUnit("미확인", "미확인", chapters);
+    html += renderUnit("미확인", "미확인", chapters, unknownNew);
   }
 
   list.innerHTML = html;
