@@ -564,7 +564,7 @@ async function performRegrade(it, source = "text") {
     // 사진 재판독 요청이거나, 인식된 문장이 없는(이 기능 이전에 채점된) 예전 항목.
     const imgs = await loadPageImages(it.id);
     if (!imgs.length) throw new Error("이미지 없음");
-    g = await gradeImages(imgs, wsData.referenceMaterial);
+    g = await gradeImages(imgs, wsData.referenceMaterial, wsData.problem);
   }
   await setDoc(doc(db, "reviews", reviewKey(it)), g);
   const flat = toFlatGrade(g);
@@ -643,7 +643,7 @@ async function runGrading() {
         } else {
           const imgs = await loadPageImages(s.id);
           if (!imgs.length) throw new Error("이미지 없음");
-          g = await gradeImages(imgs, wsData.referenceMaterial);
+          g = await gradeImages(imgs, wsData.referenceMaterial, wsData.problem);
         }
         await setDoc(doc(db, "reviews", reviewKey(s)), g);
 

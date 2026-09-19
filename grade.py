@@ -100,6 +100,7 @@ class Criterion(BaseModel):
     note: str
 
 class Grade(BaseModel):
+    check: str               # 채점 전 대조: 학생 서술 인용 ↔ 참고자료 문장 → 일치/불일치 (저장하지 않음)
     total: int
     concept: Criterion       # ① 핵심 개념 이해 (40)
     logic: Criterion         # ② 논리적 연결 (25)
@@ -119,42 +120,76 @@ SCIENCE_ACCURACY = """[과학적 정확성 — 최우선 원칙, 채점자(당�
   스스로 재검증한다.
 - 학생 답안과 비교할 모범답안 자체가 틀리면 채점 전체가 잘못되므로, 먼저
   모범답안의 과학적 정확성부터 확실히 확인한 뒤 학생 답안을 채점한다.
+- [참고자료]가 주어진 경우, 위 교차 점검 결과가 참고자료와 다르면 참고자료가
+  더 정확하다. 참고자료에 적힌 용어·방향·인과관계는 당신의 기억이나 상식과
+  달라 보여도 그대로 정답으로 인정하고, 참고자료와 일치하는 학생 서술을
+  오답 처리하거나 반박하는 피드백을 쓰지 않는다. 의심과 재검증은 참고자료에
+  없는 내용에만 적용한다.
 - 조금이라도 확신이 서지 않는 과학적 판단이 있으면 단정하지 말고,
   reviewFlag=true 로 표시해 교사가 직접 확인하게 한다."""
 
 
 def reference_section(reference_material):
-    """학습지에 참고자료(교과서 핵심 개념 요약)가 등록돼 있으면, 그걸 최우선
-    채점 기준으로 삼도록 지시하는 섹션을 만든다. 없으면 빈 문자열."""
+    """학습지에 참고자료(교과서 핵심 개념 요약)가 등록돼 있으면, 그걸 교사가 확정한
+    정답 기준으로 최우선 적용하도록 지시하는 섹션을 만든다. 없으면 빈 문자열."""
     if not reference_material:
         return ""
     return f"""
-[참고자료 — 이 학습지 단원의 정확한 과학 개념 설명]
-아래는 이 학습지가 다루는 단원의 교과서 핵심 개념을 정리한 자료다. 학생 답안의
-과학적 정확성은 당신의 지식이 아니라 반드시 이 참고자료를 기준으로 판단한다.
-참고자료와 어긋나는 서술은 오답으로 처리하고, 참고자료에 없는 내용을 판단해야
-할 때만 위 [과학적 정확성] 원칙에 따라 신중하게 스스로 검증한다.
+[참고자료 — 교사가 확정한 정답 기준. 이 프롬프트의 다른 모든 지시보다 우선한다]
+아래는 이 학습지 단원의 교과서 핵심 개념을 교사가 정리·확정한 자료다.
+- 자료의 용어·방향·인과관계는 당신의 기억, 상식, 일반 과학 지식과 달라 보여도
+  무조건 정답이다. 당신의 지식이 자료와 다르면 당신이 틀린 것이다.
+- 학생이 자료와 같은 내용(방향·용어 포함)을 썼다면 정답이다. 그것을 반대로
+  고치거나 "오류", "반대로 서술"이라고 지적하지 않는다.
+- 자료와 어긋나는 서술만 오답으로 처리한다.
+- 출력 직전, note·feedback에 쓴 모든 과학적 진술을 이 자료와 한 줄씩 대조한다.
+  자료와 모순되는 문장이 있으면 그 문장을 자료에 맞게 고치고 점수도 다시 매긴다.
+- 자료에 없는 내용을 판단해야 할 때만 [과학적 정확성] 원칙으로 스스로 검증한다.
 
 {reference_material}
 """
 
 
-def build_image_prompt(reference_material=None):
+def problem_focus(problem):
+    """등록된 문제가 있으면, 사진 판독 때 그 문제에 대한 답만 옮겨 적게 한다.
+    (같은 학습지의 다른 빈칸·요약이 섞이면 채점이 흔들린다.)"""
+    if not problem:
+        return ""
+    return f"""
+   이 학습지에 등록된 '개념 활용하기' 문제는 아래와 같다. recognizedText 에는 **이 문제가
+   묻는 문항에 대한 학생의 답만** 옮겨 적고, 학습지의 다른 빈칸·요약·필기(다른 상황에 대한
+   서술 포함)는 제외한다.
+   [등록된 문제]
+   {problem}"""
+
+
+def build_image_prompt(reference_material=None, problem=None):
+    focus = problem_focus(problem)
     return f"""당신은 중학교 3학년 과학 서술형 답안을 채점하는 교사입니다.
 이미지에는 학습지의 '문제'와 학생이 손으로 쓴 '답안'이 함께 있습니다.
-먼저 이미지에서 문제를 읽고, 그 문제에 대한 학생의 답안을 아래 기준으로 채점하세요.
+이 채점은 학습지의 '개념 활용하기'라는 제목의 문제만 대상으로 한다. 학습지에 다른 제목의
+문제·빈칸·요약·필기가 함께 있어도 읽거나 채점하지 말고, '개념 활용하기' 문제와 그 답안만 사용한다.
+먼저 이미지에서 '개념 활용하기' 문제를 읽고, 그 문제에 대한 학생의 답안을 아래 기준으로 채점하세요.
 
 [작성 절차]
 1. 이미지에서 학생이 손으로 쓴 답안 부분을 판독해, 원문 그대로(요약·교정하지
-   말고, 문제 텍스트는 제외하고 학생이 쓴 부분만) recognizedText 에 옮겨 적는다.
+   말고, 문제 텍스트는 제외하고 학생이 쓴 부분만) recognizedText 에 옮겨 적는다.{focus}
 2. 문제와 답안을 파악해 채점 초안(점수·note·feedback)을 작성한다.
 3. 그 초안을 다시 검토한다 — 채점 기준을 빠짐없이 반영했는지, 점수와 note·feedback
    내용이 서로 앞뒤가 맞는지, 사실관계나 과학적 오류는 없는지 확인한다.
 4. 검토 결과 발견한 오류나 누락을 수정·보완하여 최종 결과만 출력한다.
    (초안이나 검토 과정 자체는 출력하지 않는다.)
 
-{SCIENCE_ACCURACY}
 {reference_section(reference_material)}
+{SCIENCE_ACCURACY}
+[대조 절차 — 점수를 매기기 전에 check 필드를 먼저 채운다]
+- 문제가 묻는 문항마다 (a) 학생 답안의 핵심 서술을 원문 그대로 인용하고,
+  (b) [참고자료]에서 그에 해당하는 문장을 인용한 뒤, (c) 두 내용의 방향·용어가
+  같으면 "일치", 다르면 "불일치"라고 판정한다. 인용은 글자 그대로 옮기며,
+  학생이 쓰지 않은 내용을 학생 서술로 인용하지 않는다.
+- 이후 점수·note·feedback은 check 의 판정과 반드시 같은 결론이어야 한다.
+  "일치"로 판정한 서술을 오답이라고 쓰지 않는다.
+
 [채점 기준 — 중요도 순, 100점]
 1. 핵심 개념을 맞게 이해했는가 (40점)  → concept
 2. 문장이 논리적으로 이어지는가 (25점)  → logic
@@ -176,7 +211,9 @@ def build_image_prompt(reference_material=None):
 
 def build_text_prompt(problem, answer, reference_material=None):
     return f"""당신은 중학교 3학년 과학 서술형 답안을 채점하는 교사입니다.
-아래는 학습지의 '문제'와 학생이 직접 입력한 '답안'입니다.
+아래는 학습지의 '개념 활용하기' 문제와 학생이 직접 입력한 '답안'입니다.
+이 채점은 '개념 활용하기'라는 제목의 문제만 대상으로 하며, 답안에 섞인 다른 제목의
+문제·빈칸·요약에 대한 내용은 채점에 사용하지 않는다.
 
 [문제]
 {problem or "(미등록)"}
@@ -191,8 +228,16 @@ def build_text_prompt(problem, answer, reference_material=None):
 3. 검토 결과 발견한 오류나 누락을 수정·보완하여 최종 결과만 출력한다.
    (초안이나 검토 과정 자체는 출력하지 않는다.)
 
-{SCIENCE_ACCURACY}
 {reference_section(reference_material)}
+{SCIENCE_ACCURACY}
+[대조 절차 — 점수를 매기기 전에 check 필드를 먼저 채운다]
+- 문제가 묻는 문항마다 (a) 학생 답안의 핵심 서술을 원문 그대로 인용하고,
+  (b) [참고자료]에서 그에 해당하는 문장을 인용한 뒤, (c) 두 내용의 방향·용어가
+  같으면 "일치", 다르면 "불일치"라고 판정한다. 인용은 글자 그대로 옮기며,
+  학생이 쓰지 않은 내용을 학생 서술로 인용하지 않는다.
+- 이후 점수·note·feedback은 check 의 판정과 반드시 같은 결론이어야 한다.
+  "일치"로 판정한 서술을 오답이라고 쓰지 않는다.
+
 [채점 기준 — 중요도 순, 100점]
 1. 핵심 개념을 맞게 이해했는가 (40점)  → concept
 2. 문장이 논리적으로 이어지는가 (25점)  → logic
@@ -207,6 +252,10 @@ def build_text_prompt(problem, answer, reference_material=None):
 - 이 문제를 푸는 대상은 중학교 3학년 학생이다. 모범답안·채점·피드백 모두
   중학교 3학년 교육과정 수준에서 판단하고, 고등학교 이상 수준의 개념·용어·
   표현을 요구하거나 사용하지 않는다.
+- [학생 답안]에는 문제와 무관한 다른 학습 활동(같은 학습지의 다른 빈칸·요약 등)이나
+  문제 본문이 섞여 있을 수 있다. [문제]가 묻는 문항(예: 1), 2))에 대한 답만 채점한다.
+  문제가 묻는 상황과 다른 상황(예: 문제는 밝은 곳인데 어두운 곳)에 대한 문장은
+  이 문제에 대한 학생의 답으로 보지 않으며, 그 문장을 근거로 감점하지 않는다.
 - [문제]가 비어 있으면 채점할 수 없으니 reviewFlag=true 로 표시하고
   reviewReason 에 "문제 텍스트 미등록"이라고 적는다(그 외에는 false).
 """
@@ -239,8 +288,8 @@ db = firestore.client()
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 
-def grade_images(image_bytes_list, reference_material=None):
-    parts = [build_image_prompt(reference_material)] + [
+def grade_images(image_bytes_list, reference_material=None, problem=None):
+    parts = [build_image_prompt(reference_material, problem)] + [
         types.Part.from_bytes(data=b, mime_type="image/jpeg") for b in image_bytes_list
     ]
     res = client.models.generate_content(
@@ -248,7 +297,9 @@ def grade_images(image_bytes_list, reference_material=None):
         contents=parts,
         config={"response_mime_type": "application/json", "response_schema": Grade},
     )
-    return json.loads(res.text)
+    g = json.loads(res.text)
+    g.pop("check", None)
+    return g
 
 
 def grade_text(problem, answer, reference_material=None):
@@ -259,6 +310,7 @@ def grade_text(problem, answer, reference_material=None):
         config={"response_mime_type": "application/json", "response_schema": Grade},
     )
     g = json.loads(res.text)
+    g.pop("check", None)
     g["recognizedText"] = answer  # 텍스트 답안은 이미 원문이 있으므로 모델 출력 대신 그대로 사용
     return g
 
@@ -337,7 +389,19 @@ def grade_submission(sub_id, data):
             imgs.append(base64.b64decode(b64))
     if not imgs:
         raise ValueError("이미지 없음")
-    return append_resubmit_note(grade_images(imgs, reference_material))
+    g = grade_images(imgs, reference_material, problem)
+    # 사진 채점은 이미지 속 인쇄 문구 등에 흔들려 참고자료를 어기는 일이 있다. 문제가 등록돼 있고
+    # 판독문이 있으면, 판독문을 등록된 문제·참고자료로 텍스트 채점해 점수·피드백을 확정한다.
+    # (판독문은 사진 단계 결과를 그대로 쓰고, 판독이 애매하다는 표시는 이어받는다.)
+    if problem and g.get("recognizedText", "").strip():
+        photo_flag, photo_reason = g.get("reviewFlag"), g.get("reviewReason", "")
+        time.sleep(THROTTLE_SEC)
+        g2 = grade_text(problem, g["recognizedText"], reference_material)
+        if photo_flag:
+            g2["reviewFlag"] = True
+            g2["reviewReason"] = photo_reason or g2.get("reviewReason", "")
+        g = g2
+    return append_resubmit_note(g)
 
 
 def main():

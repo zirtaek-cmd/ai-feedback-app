@@ -4,7 +4,9 @@ import { GEMINI_API_KEY, GEMINI_MODEL } from "../config.js";
 
 const SCHEMA = {
   type: "OBJECT",
+  propertyOrdering: ["check", "total", "concept", "logic", "evidence", "expression", "recognizedText", "feedback", "reviewFlag", "reviewReason"],
   properties: {
+    check: { type: "STRING" },
     total: { type: "INTEGER" },
     concept: { type: "OBJECT", properties: { score: { type: "INTEGER" }, note: { type: "STRING" } }, required: ["score", "note"] },
     logic: { type: "OBJECT", properties: { score: { type: "INTEGER" }, note: { type: "STRING" } }, required: ["score", "note"] },
@@ -15,7 +17,7 @@ const SCHEMA = {
     reviewFlag: { type: "BOOLEAN" },
     reviewReason: { type: "STRING" },
   },
-  required: ["total", "concept", "logic", "evidence", "expression", "recognizedText", "feedback", "reviewFlag", "reviewReason"],
+  required: ["check", "total", "concept", "logic", "evidence", "expression", "recognizedText", "feedback", "reviewFlag", "reviewReason"],
 };
 
 const SCIENCE_ACCURACY = `[과학적 정확성 — 최우선 원칙, 채점자(당신) 스스로에게 적용]
@@ -30,36 +32,61 @@ const SCIENCE_ACCURACY = `[과학적 정확성 — 최우선 원칙, 채점자(�
 - 조금이라도 확신이 서지 않는 과학적 판단이 있으면 단정하지 말고,
   reviewFlag=true 로 표시해 교사가 직접 확인하게 한다.`;
 
-// 학습지에 참고자료(교과서 핵심 개념 요약)가 등록돼 있으면, 그걸 최우선 채점
-// 기준으로 삼도록 지시하는 섹션을 만든다. 없으면 빈 문자열(기존 방식대로 동작).
+// 학습지에 참고자료(교과서 핵심 개념 요약)가 등록돼 있으면, 그걸 교사가 확정한 정답 기준으로
+// 최우선 적용하도록 지시하는 섹션을 만든다. 없으면 빈 문자열(기존 방식대로 동작).
 function referenceSection(referenceMaterial) {
   if (!referenceMaterial) return "";
-  return `\n[참고자료 — 이 학습지 단원의 정확한 과학 개념 설명]
-아래는 이 학습지가 다루는 단원의 교과서 핵심 개념을 정리한 자료다. 학생 답안의
-과학적 정확성은 당신의 지식이 아니라 반드시 이 참고자료를 기준으로 판단한다.
-참고자료와 어긋나는 서술은 오답으로 처리하고, 참고자료에 없는 내용을 판단해야
-할 때만 위 [과학적 정확성] 원칙에 따라 신중하게 스스로 검증한다.
+  return `\n[참고자료 — 교사가 확정한 정답 기준. 이 프롬프트의 다른 모든 지시보다 우선한다]
+아래는 이 학습지 단원의 교과서 핵심 개념을 교사가 정리·확정한 자료다.
+- 자료의 용어·방향·인과관계는 당신의 기억, 상식, 일반 과학 지식과 달라 보여도
+  무조건 정답이다. 당신의 지식이 자료와 다르면 당신이 틀린 것이다.
+- 학생이 자료와 같은 내용(방향·용어 포함)을 썼다면 정답이다. 그것을 반대로
+  고치거나 "오류", "반대로 서술"이라고 지적하지 않는다.
+- 자료와 어긋나는 서술만 오답으로 처리한다.
+- 출력 직전, note·feedback에 쓴 모든 과학적 진술을 이 자료와 한 줄씩 대조한다.
+  자료와 모순되는 문장이 있으면 그 문장을 자료에 맞게 고치고 점수도 다시 매긴다.
+- 자료에 없는 내용을 판단해야 할 때만 [과학적 정확성] 원칙으로 스스로 검증한다.
 
 ${referenceMaterial}
 `;
 }
 
-function imagePrompt(referenceMaterial) {
+function problemFocus(problem) {
+  if (!problem) return "";
+  return `
+   이 학습지에 등록된 '개념 활용하기' 문제는 아래와 같다. recognizedText 에는 **이 문제가
+   묻는 문항에 대한 학생의 답만** 옮겨 적고, 학습지의 다른 빈칸·요약·필기(다른 상황에 대한
+   서술 포함)는 제외한다.
+   [등록된 문제]
+   ${problem}`;
+}
+
+function imagePrompt(referenceMaterial, problem) {
   return `당신은 중학교 3학년 과학 서술형 답안을 채점하는 교사입니다.
 이미지에는 학습지의 '문제'와 학생이 손으로 쓴 '답안'이 함께 있습니다.
-먼저 이미지에서 문제를 읽고, 그 문제에 대한 학생의 답안을 아래 기준으로 채점하세요.
+이 채점은 학습지의 '개념 활용하기'라는 제목의 문제만 대상으로 한다. 학습지에 다른 제목의
+문제·빈칸·요약·필기가 함께 있어도 읽거나 채점하지 말고, '개념 활용하기' 문제와 그 답안만 사용한다.
+먼저 이미지에서 '개념 활용하기' 문제를 읽고, 그 문제에 대한 학생의 답안을 아래 기준으로 채점하세요.
 
 [작성 절차]
 1. 이미지에서 학생이 손으로 쓴 답안 부분을 판독해, 원문 그대로(요약·교정하지
-   말고, 문제 텍스트는 제외하고 학생이 쓴 부분만) recognizedText 에 옮겨 적는다.
+   말고, 문제 텍스트는 제외하고 학생이 쓴 부분만) recognizedText 에 옮겨 적는다.${problemFocus(problem)}
 2. 문제와 답안을 파악해 채점 초안(점수·note·feedback)을 작성한다.
 3. 그 초안을 다시 검토한다 — 채점 기준을 빠짐없이 반영했는지, 점수와 note·feedback
    내용이 서로 앞뒤가 맞는지, 사실관계나 과학적 오류는 없는지 확인한다.
 4. 검토 결과 발견한 오류나 누락을 수정·보완하여 최종 결과만 출력한다.
    (초안이나 검토 과정 자체는 출력하지 않는다.)
 
-${SCIENCE_ACCURACY}
 ${referenceSection(referenceMaterial)}
+${SCIENCE_ACCURACY}
+[대조 절차 — 점수를 매기기 전에 check 필드를 먼저 채운다]
+- 문제가 묻는 문항마다 (a) 학생 답안의 핵심 서술을 원문 그대로 인용하고,
+  (b) [참고자료]에서 그에 해당하는 문장을 인용한 뒤, (c) 두 내용의 방향·용어가
+  같으면 "일치", 다르면 "불일치"라고 판정한다. 인용은 글자 그대로 옮기며,
+  학생이 쓰지 않은 내용을 학생 서술로 인용하지 않는다.
+- 이후 점수·note·feedback은 check 의 판정과 반드시 같은 결론이어야 한다.
+  "일치"로 판정한 서술을 오답이라고 쓰지 않는다.
+
 [채점 기준 — 중요도 순, 100점]
 1. 핵심 개념을 맞게 이해했는가 (40점)  → concept
 2. 문장이 논리적으로 이어지는가 (25점)  → logic
@@ -80,7 +107,9 @@ ${referenceSection(referenceMaterial)}
 
 function textPrompt(problem, answer, referenceMaterial) {
   return `당신은 중학교 3학년 과학 서술형 답안을 채점하는 교사입니다.
-아래는 학습지의 '문제'와 학생이 직접 입력한 '답안'입니다.
+아래는 학습지의 '개념 활용하기' 문제와 학생이 직접 입력한 '답안'입니다.
+이 채점은 '개념 활용하기'라는 제목의 문제만 대상으로 하며, 답안에 섞인 다른 제목의
+문제·빈칸·요약에 대한 내용은 채점에 사용하지 않는다.
 
 [문제]
 ${problem || "(미등록)"}
@@ -95,8 +124,16 @@ ${answer}
 3. 검토 결과 발견한 오류나 누락을 수정·보완하여 최종 결과만 출력한다.
    (초안이나 검토 과정 자체는 출력하지 않는다.)
 
-${SCIENCE_ACCURACY}
 ${referenceSection(referenceMaterial)}
+${SCIENCE_ACCURACY}
+[대조 절차 — 점수를 매기기 전에 check 필드를 먼저 채운다]
+- 문제가 묻는 문항마다 (a) 학생 답안의 핵심 서술을 원문 그대로 인용하고,
+  (b) [참고자료]에서 그에 해당하는 문장을 인용한 뒤, (c) 두 내용의 방향·용어가
+  같으면 "일치", 다르면 "불일치"라고 판정한다. 인용은 글자 그대로 옮기며,
+  학생이 쓰지 않은 내용을 학생 서술로 인용하지 않는다.
+- 이후 점수·note·feedback은 check 의 판정과 반드시 같은 결론이어야 한다.
+  "일치"로 판정한 서술을 오답이라고 쓰지 않는다.
+
 [채점 기준 — 중요도 순, 100점]
 1. 핵심 개념을 맞게 이해했는가 (40점)  → concept
 2. 문장이 논리적으로 이어지는가 (25점)  → logic
@@ -150,19 +187,34 @@ async function callGemini(parts, schema) {
 }
 
 // dataUrls: "data:image/jpeg;base64,...." 배열
-export async function gradeImages(dataUrls, referenceMaterial) {
+export async function gradeImages(dataUrls, referenceMaterial, problem) {
   const parts = [
-    { text: imagePrompt(referenceMaterial) },
+    { text: imagePrompt(referenceMaterial, problem) },
     ...dataUrls.map((u) => ({
       inlineData: { mimeType: "image/jpeg", data: u.split(",", 2)[1] || u },
     })),
   ];
   const g = await callGemini(parts, SCHEMA);
+  delete g.check;
+  // 사진 채점은 이미지 속 인쇄 문구 등에 흔들려 참고자료를 어기는 일이 있다. 문제가 등록돼 있고
+  // 판독문이 있으면, 판독문을 등록된 문제·참고자료로 텍스트 채점해 점수·피드백을 확정한다
+  // (grade.py 와 동일. 판독문은 사진 단계 결과를 쓰고 "판독 애매" 표시는 이어받는다).
+  if (problem && (g.recognizedText || "").trim()) {
+    const g2 = await callGemini([{ text: textPrompt(problem, g.recognizedText, referenceMaterial) }], SCHEMA);
+    delete g2.check;
+    g2.recognizedText = g.recognizedText;
+    if (g.reviewFlag) {
+      g2.reviewFlag = true;
+      g2.reviewReason = g.reviewReason || g2.reviewReason;
+    }
+    return appendResubmitNote(g2);
+  }
   return appendResubmitNote(g);
 }
 
 export async function gradeText(problem, answer, referenceMaterial) {
   const g = await callGemini([{ text: textPrompt(problem, answer, referenceMaterial) }], SCHEMA);
+  delete g.check;
   g.recognizedText = answer; // 텍스트 답안은 이미 원문이 있으므로 모델 출력 대신 그대로 사용
   return appendResubmitNote(g);
 }
@@ -189,7 +241,9 @@ const SCHEMA_FREEFORM = {
 function freeformImagePrompt(referenceMaterial) {
   return `당신은 중학교 3학년 과학 서술형 답안을 채점하는 교사입니다.
 이미지에는 문제와 학생이 손으로 쓴 답안이 함께 있습니다.
-먼저 이미지에서 문제를 읽고, 그 문제에 대한 학생의 답안을 아래 기준으로 채점하세요.
+이 채점은 학습지의 '개념 활용하기'라는 제목의 문제만 대상으로 한다. 학습지에 다른 제목의
+문제·빈칸·요약·필기가 함께 있어도 읽거나 채점하지 말고, '개념 활용하기' 문제와 그 답안만 사용한다.
+먼저 이미지에서 '개념 활용하기' 문제를 읽고, 그 문제에 대한 학생의 답안을 아래 기준으로 채점하세요.
 
 [작성 절차]
 1. 이미지에서 문제를 파악하고, 학생 답안을 기준에 따라 채점 초안(점수·note·
@@ -202,8 +256,8 @@ function freeformImagePrompt(referenceMaterial) {
 4. 검토 결과 발견한 오류나 누락을 수정·보완하여 최종 결과만 출력한다.
    (초안이나 검토 과정 자체는 출력하지 않는다.)
 
-${SCIENCE_ACCURACY}
 ${referenceSection(referenceMaterial)}
+${SCIENCE_ACCURACY}
 [채점 기준 — 중요도 순, 100점]
 1. 핵심 개념을 맞게 이해했는가 (40점)  → concept
 2. 문장이 논리적으로 이어지는가 (25점)  → logic
