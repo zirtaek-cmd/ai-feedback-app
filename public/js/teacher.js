@@ -691,6 +691,19 @@ async function runGrading() {
 const STATUS_LABEL = { submitted: "채점 대기", graded: "검토 대기", released: "채점됨", rejected: "채점 불가", error: "채점 실패" };
 const STATUS_CLS   = { submitted: "s-none",   graded: "s-pending",  released: "s-done", rejected: "s-rejected", error: "s-flag" };
 
+// 교사 화면 제목 아래에 표시할 제출 시각(KST). 재제출이면 몇 번째 제출인지도 붙인다.
+function submittedAtLine(it) {
+  const t = it.submittedAt;
+  const d = t?.toDate ? t.toDate() : (t?.seconds ? new Date(t.seconds * 1000) : null);
+  if (!d || isNaN(d)) return "";
+  const when = d.toLocaleString("ko-KR", {
+    timeZone: "Asia/Seoul", year: "numeric", month: "long", day: "numeric",
+    weekday: "short", hour: "numeric", minute: "2-digit", hour12: false,
+  });
+  const nth = it.attempt > 1 ? ` · ${it.attempt}번째 제출` : "";
+  return `<div class="muted small" style="margin-top:4px">제출 ${escapeHtml(when)}${nth}</div>`;
+}
+
 // 교사가 "과제 완료"를 누른 건은 원래 상태 대신 "완료"로 표시한다(별도 탭 없음).
 function statusBadge(it) {
   if (it.completed) return `<span class="badge s-complete">완료</span>`;
@@ -879,7 +892,10 @@ async function selectItem(id) {
 
   const header = `
     <header class="main-head">
-      <h2>${escapeHtml(it.worksheetId)} · ${escapeHtml(it.studentEmail)}</h2>
+      <div>
+        <h2>${escapeHtml(it.worksheetId)} · ${escapeHtml(it.studentEmail)}</h2>
+        ${submittedAtLine(it)}
+      </div>
       ${statusBadge(it)}
       <button class="btn ghost" id="completeBtn" style="margin-left:auto">${it.completed ? "완료 취소" : "과제 완료"}</button>
       <button class="btn ghost" id="deleteBtn">삭제</button>
