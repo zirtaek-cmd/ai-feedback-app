@@ -691,6 +691,24 @@ async function runGrading() {
 const STATUS_LABEL = { submitted: "채점 대기", graded: "검토 대기", released: "채점됨", rejected: "채점 불가", error: "채점 실패" };
 const STATUS_CLS   = { submitted: "s-none",   graded: "s-pending",  released: "s-done", rejected: "s-rejected", error: "s-flag" };
 
+// "NEW" 배지: 채점이 끝났는데 교사가 아직 열어 보지 않은 제출. 항목을 누르면 submissions.teacherSeenAt 에
+// 시각을 남기고, 채점 시각(gradedAt)이 그보다 늦으면(재채점·재제출) 다시 NEW 가 된다.
+// 이 기능을 넣기 전에 이미 채점된 건은 NEW 로 띄우지 않는다(기준 시각 이전 채점분은 제외).
+const NEW_BADGE_SINCE_MS = 1789796139000;
+const seenThisSession = new Map(); // id → 방금 확인 처리한 gradedAt(ms). 서버 반영 전 깜빡임 방지
+
+function tsMs(t) {
+  return t?.toMillis ? t.toMillis() : 0;
+}
+
+function isNewItem(it) {
+  if (it.status !== "graded" && it.status !== "released") return false;
+  const graded = tsMs(it.gradedAt);
+  if (!graded || graded <= NEW_BADGE_SINCE_MS) return false;
+  if ((seenThisSession.get(it.id) || 0) >= graded) return false;
+  return tsMs(it.teacherSeenAt) < graded;
+}
+
 // 교사 화면 제목 아래에 표시할 제출 시각(KST). 재제출이면 몇 번째 제출인지도 붙인다.
 function submittedAtLine(it) {
   const t = it.submittedAt;
@@ -746,7 +764,7 @@ function renderList() {
     const num = rosterMap[it.studentEmail]?.number;
     const who = num ? `${num}번 ${escapeHtml(it.studentEmail)}` : escapeHtml(it.studentEmail);
     return `<button class="ws-item ${active}" data-id="${escapeHtml(it.id)}">
-        <span class="ws-code">${who}</span>
+        <span class="ws-code">${who}${isNewItem(it) ? ' <span class="badge s-new">NEW</span>' : ""}</span>
         <span>${score ?? "-"}점
           ${statusBadge(it)}
           ${flag}${edited}
@@ -865,6 +883,10 @@ function renderList() {
 async function selectItem(id) {
   state.selected = id;
   const it = state.items.find((x) => x.id === id);
+  if (it && isNewItem(it)) {
+    seenThisSession.set(it.id, tsMs(it.gradedAt));
+    updateDoc(doc(db, "submissions", it.id), { teacherSeenAt: serverTimestamp() }).catch(() => {});
+  }
   // 선택한 항목이 든 그룹은 펼쳐 둔다(접힌 채로 선택 표시만 남지 않도록).
   if (it) {
     const cls = String(rosterMap[it.studentEmail]?.class ?? "미확인");

@@ -168,6 +168,7 @@ summary.unit-title:hover { background: var(--grey-soft); }
 .s-done { background: var(--green-soft); color: var(--green); }
 .s-complete { background: var(--indigo-soft); color: var(--indigo-dark); }
 .s-flag { background: #fdeceb; color: #b42318; }
+.s-new { background: #e11d48; color: #fff; font-size: 11px; padding: 1px 7px; margin-left: 6px; letter-spacing: .02em; }
 .s-rejected { background: var(--red-soft); color: var(--red); }
 
 /* ---------- 메인 콘텐츠 ---------- */
