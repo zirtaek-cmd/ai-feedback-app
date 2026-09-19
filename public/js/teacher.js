@@ -762,9 +762,11 @@ function renderList() {
     // 공개 전 점수는 목록에도 띄우지 않는다(초안은 항목을 열었을 때만 조회).
     const score = it.status === "released" ? it.grade?.total : null;
     const num = rosterMap[it.studentEmail]?.number;
-    const who = num ? `${num}번 ${escapeHtml(it.studentEmail)}` : escapeHtml(it.studentEmail);
+    const newBadge = isNewItem(it) ? ' <span class="badge s-new">NEW</span>' : "";
+    // NEW 는 번호 바로 옆에 둔다(번호가 없으면 이메일 뒤).
+    const who = num ? `${num}번${newBadge} ${escapeHtml(it.studentEmail)}` : `${escapeHtml(it.studentEmail)}${newBadge}`;
     return `<button class="ws-item ${active}" data-id="${escapeHtml(it.id)}">
-        <span class="ws-code">${who}${isNewItem(it) ? ' <span class="badge s-new">NEW</span>' : ""}</span>
+        <span class="ws-code">${who}</span>
         <span>${score ?? "-"}점
           ${statusBadge(it)}
           ${flag}${edited}
